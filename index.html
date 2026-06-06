@@ -279,6 +279,11 @@
             </ol>
             <p>When you think you've identified <em>all</em> criteria, work out the unique code that satisfies them all, and press <strong>Submit code</strong>. Fewer total questions = better score.</p>
             <p class="hint">There is always exactly one code that satisfies every criterion, and no verifier is superfluous — you need all of them.</p>
+            <h4>Hard+</h4>
+            <p>In <strong>Hard+</strong> you face 5 verifiers drawn from the full rule pool, with <strong>at least 3</strong> of them being <em>"which color does X?"</em> templates — e.g. "<strong>A specific color is the sum of the other two</strong>" with options <em>Blue = Yellow + Purple / Yellow = Blue + Purple / Purple = Blue + Yellow</em>. The puzzle picks which color is the real one. For those color-rules, Ask works on <em>any</em> proposal (even when 0 or many options match) — the verifier just answers YES or NO, and the system only auto-marks options when exactly one of the card's options matches your number.</p>
+            <h4>Extreme mode</h4>
+            <p>In <strong>Extreme</strong> games each verifier shows <strong>two</strong> criteria cards — but the verifier only tests <em>one</em> of them. You have to deduce both which card is the active one AND which option on that card is the real criterion. The Ask rule still applies across both cards together: you can only Ask when exactly one option across the entire verifier matches your number.</p>
+            <p class="hint">Auto-deduction in Extreme is intentionally quieter: a card is marked dead (<strong>⊘</strong>) only once every one of its options is ruled out, and an option is auto-confirmed only when it's the last possibility across <em>both</em> cards combined.</p>
         </div>
         <div class="menu-buttons">
             <button id="btn-close-rules" class="btn-back">Close</button>
@@ -347,6 +352,14 @@
                     <button class="dial-step" data-cfg="questionsPerRound" data-delta="-1">−</button>
                     <span class="stepper-val" id="cfg-qpr">3</span>
                     <button class="dial-step" data-cfg="questionsPerRound" data-delta="1">+</button>
+                </div>
+            </div>
+            <div class="stepper-row">
+                <div class="stepper-label">Extreme mode</div>
+                <div class="stepper-controls">
+                    <button class="dial-step" data-cfg="extreme" data-delta="-1">−</button>
+                    <span class="stepper-val" id="cfg-extreme">off</span>
+                    <button class="dial-step" data-cfg="extreme" data-delta="1">+</button>
                 </div>
             </div>
         </div>

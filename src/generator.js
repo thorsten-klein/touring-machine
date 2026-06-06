@@ -15,6 +15,32 @@
 
 const VERIFIER_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F'];
 
+// Hard+: minimum number of color-parameterized verifiers per puzzle. The
+// remaining slots come from the full pool. Tuned so that a 6-verifier Hard+
+// game always has a solid color-deduction core without over-constraining
+// (all-colorParam puzzles often have no solution within the budget).
+const HARDPLUS_MIN_COLOR_VERIFIERS = 3;
+
+// Returns the [paneA, paneB] (or [paneA]) view of a verifier card. paneA is
+// always at display index 0 and paneB at index 1; the `swap` flag on extreme
+// cards reverses which of (id,opt) vs (altId,altOpt) appears in pane 0.
+// Each returned entry carries .active === true for the pane that the verifier
+// actually tests; for non-extreme cards there is exactly one entry, which is
+// trivially active. Callers should treat the returned panes as the visible
+// arrangement (left/top → right/bottom) — the truth bit lives on .active.
+function paneListOf(card) {
+    if (card.altId === undefined) {
+        return [{ id: card.id, opt: card.opt, active: true }];
+    }
+    const real = { id: card.id,    opt: card.opt,    active: true  };
+    const fake = { id: card.altId, opt: card.altOpt, active: false };
+    return card.swap ? [fake, real] : [real, fake];
+}
+
+function isExtremeCard(card) {
+    return card && card.altId !== undefined;
+}
+
 // --- random helpers (seeded, deterministic so a seed reproduces a puzzle) ---
 function mulberry32(seed) {
     let a = seed >>> 0;
@@ -93,8 +119,15 @@ function isValidPuzzle(puzzle) {
     // whose options aren't mutually exclusive on the solution (e.g. "sum is
     // a multiple of 3" and "…of 4" both true when sum=12) would let the
     // player query with the solution itself and not know which option fits.
+    //
+    // EXCEPTION: multiOption cards (Hard+ OR-combo cards) are designed so
+    // most proposals match multiple options. The puzzle is still uniquely
+    // solvable on the SOLUTION CODE; the player just can't reverse-engineer
+    // which specific option was the criterion, which is the point. Skip
+    // the check for those.
     for (const { id } of puzzle.cards) {
         const def = CARDS_BY_ID[id];
+        if (def.multiOption) continue;
         let pass = 0;
         for (const opt of def.options) if (opt.test(solution)) pass++;
         if (pass !== 1) return false;
@@ -115,6 +148,10 @@ const LEVELS = {
     EASY:    { id:'EASY',    label:'Easy',    verifiers:Math.min(4, GAME_CONFIG.maxVerifiers), description:'4 verifiers · perfect for a first game' },
     MEDIUM:  { id:'MEDIUM',  label:'Medium',  verifiers:Math.min(5, GAME_CONFIG.maxVerifiers), description:'5 verifiers · the standard challenge' },
     HARD:    { id:'HARD',    label:'Hard',    verifiers:Math.min(6, GAME_CONFIG.maxVerifiers), description:'6 verifiers · for experienced sleuths' },
+    HARDPLUS:{ id:'HARDPLUS',label:'Hard+',   verifiers:Math.min(5, GAME_CONFIG.maxVerifiers), hardplus:true,
+               description:'5 verifiers · ≥3 "which color does X?" rules + OR-combo cards from easier levels' },
+    EXTREME: { id:'EXTREME', label:'Extreme', verifiers:Math.min(5, GAME_CONFIG.maxVerifiers), extreme:true,
+               description:'5 verifiers · each shows TWO cards — only one is real' },
     CUSTOM:  { id:'CUSTOM',  label:'Custom level', verifiers:0,             description:'Pick your own digit range and verifier count' },
 };
 
@@ -136,6 +173,17 @@ function generatePuzzle(level, seed, opts = {}) {
     const questionsPerRound = opts.questionsPerRound !== undefined
         ? opts.questionsPerRound
         : (level === 'CUSTOM' ? 3 : GAME_CONFIG.questionsPerRound);
+    // Extreme: every verifier slot also gets a decoy card. Active card alone
+    // determines puzzle validity; decoy is just a distractor for the player.
+    const extreme = opts.extreme !== undefined
+        ? !!opts.extreme
+        : !!(LEVELS[level] && LEVELS[level].extreme);
+    // Hard+: restrict the card pool to colorParam cards — every verifier's
+    // rule is "which color satisfies <predicate>?". Same deduction mechanics
+    // as a normal puzzle, but the homogeneous card style raises the bar.
+    const hardplus = opts.hardplus !== undefined
+        ? !!opts.hardplus
+        : !!(LEVELS[level] && LEVELS[level].hardplus);
     // Default budget bumped to account for the stricter `isValidPuzzle`
     // constraints (solution must activate exactly one option per card AND no
     // two cards may share an option prefix). HARD (6 verifiers) needs a few
@@ -143,11 +191,37 @@ function generatePuzzle(level, seed, opts = {}) {
     const maxAttempts = opts.maxAttempts || 100000;
     const baseSeed = (seed === undefined) ? Math.floor(Math.random() * 0xFFFFFFFF) : seed;
     let attempt = 0;
+    // Card pool — Hard+ uses the FULL pool (including the easier levels'
+    // cards) and requires every puzzle to contain at least one colorParam
+    // verifier (otherwise it's indistinguishable from HARD). The
+    // colorParam-requirement gate is applied AFTER selection: an attempt
+    // that picked zero colorParam cards is rejected and the loop tries
+    // again with a fresh seed. This works because the colorParam family is
+    // a comfortable share of the pool, so random shuffles hit it often.
     while (attempt < maxAttempts) {
         if (opts.signal && opts.signal.aborted) return null;
         const rng = mulberry32((baseSeed + attempt * 2654435761) >>> 0);
         attempt++;
-        const shuffled = shuffle(rng, CARDS);
+        let shuffled;
+        if (hardplus) {
+            // Pin 3 colorParam cards to the front so the family-distinct
+            // greedy loop picks at least 3 colorParam verifiers; the rest
+            // are sampled randomly from the FULL pool (including the
+            // remaining colorParam cards AND the Hard+-only OR-combo
+            // cards). This is the only reliable way to satisfy the ≥3
+            // colorParam requirement within budget — a plain random shuffle
+            // of the full pool rarely lands ≥3.
+            const cp     = shuffle(rng, CARDS.filter(c => c.colorParam));
+            const others = shuffle(rng, CARDS.filter(c => !c.colorParam));
+            const head   = cp.slice(0, HARDPLUS_MIN_COLOR_VERIFIERS);
+            const tail   = shuffle(rng, [...cp.slice(HARDPLUS_MIN_COLOR_VERIFIERS), ...others]);
+            shuffled     = [...head, ...tail];
+        } else {
+            // Non-Hard+ pools exclude the Hard+ OR-combo cards (those have
+            // multiOption semantics that the standard 1-● Ask rule can't
+            // accommodate elsewhere).
+            shuffled = shuffle(rng, CARDS.filter(c => !c.hardplusOnly));
+        }
         const chosen = [];
         const usedFamilies = new Set();
         // Tracks option-prefixes of cards already picked in this attempt so
@@ -155,23 +229,41 @@ function generatePuzzle(level, seed, opts = {}) {
         // the puzzle to isValidPuzzle. Early-rejecting here is the big win:
         // most random combinations would fail the prefix-uniqueness check,
         // and dropping them now skips the 125-code enumeration entirely.
+        //
+        // Hard+ INTENTIONALLY violates the prefix-uniqueness rule: the whole
+        // appeal of that level is that every verifier asks the same SHAPE of
+        // question (Color < N, Color = N, …) and the player must isolate the
+        // active color. Enforcing distinct prefixes here would also make 6
+        // verifiers from the colorParam pool nearly impossible to source.
         const usedPrefixes = new Set();
         for (const card of shuffled) {
             if (chosen.length === verifiers) break;
             /* istanbul ignore if -- with the default pruned card pool, no two surviving cards share a family, so this dedup is defensive against future config changes */
             if (usedFamilies.has(card.family)) continue;
             const prefs = cardPrefixes(card);
-            let clash = false;
-            for (const p of prefs) {
-                if (usedPrefixes.has(p)) { clash = true; break; }
+            if (!hardplus) {
+                let clash = false;
+                for (const p of prefs) {
+                    if (usedPrefixes.has(p)) { clash = true; break; }
+                }
+                if (clash) continue;
             }
-            if (clash) continue;
             const opt = Math.floor(rng() * card.options.length);
             chosen.push({ id: card.id, opt });
             usedFamilies.add(card.family);
             for (const p of prefs) usedPrefixes.add(p);
         }
         if (chosen.length < verifiers) continue;
+        // Hard+ requires at least HARDPLUS_MIN_COLOR_VERIFIERS colorParam
+        // verifiers so the level genuinely reads as "the color-deduction
+        // one" — random shuffles of the full pool would otherwise often
+        // produce HARD-looking puzzles. The threshold is set below the
+        // total verifier count to leave room for easier-level rules.
+        if (hardplus) {
+            let cpCount = 0;
+            for (const c of chosen) if (CARDS_BY_ID[c.id].colorParam) cpCount++;
+            if (cpCount < HARDPLUS_MIN_COLOR_VERIFIERS) continue;
+        }
         const puzzle = {
             level,
             seed: baseSeed,
@@ -181,33 +273,74 @@ function generatePuzzle(level, seed, opts = {}) {
                 digitMax: GAME_CONFIG.digitMax,
                 verifiers,
                 questionsPerRound,
+                extreme,
+                hardplus,
             },
         };
-        if (isValidPuzzle(puzzle)) {
-            puzzle.solution = solutionsFor(puzzle)[0];
-            return puzzle;
+        if (!isValidPuzzle(puzzle)) continue;
+        // Active cards form a valid puzzle — now attach decoys for extreme.
+        // Decoy at slot i must be a different family than the slot's ACTIVE
+        // card (so the pair reads as two genuinely different rules) but is
+        // otherwise unconstrained — decoys may share families across slots
+        // and may collide with prefixes of other slots' actives; both are
+        // intentional and add to the bluff.
+        if (extreme) {
+            const ok = attachDecoys(puzzle, rng);
+            /* istanbul ignore if -- triggered only when the pool has no different-family decoy for some slot; tested directly via the attachDecoys-stubbed test */
+            if (!ok) continue;
         }
+        puzzle.solution = solutionsFor(puzzle)[0];
+        return puzzle;
     }
     return null;
+}
+
+// For each verifier slot, pick a decoy card with a different family than the
+// slot's active card. Returns true on success; false if the pool is too small
+// to provide a same-slot family-distinct decoy for every slot (in which case
+// the caller will retry with a different seed). Mutates puzzle.cards in place.
+function attachDecoys(puzzle, rng) {
+    for (const slot of puzzle.cards) {
+        const activeDef = CARDS_BY_ID[slot.id];
+        const candidates = CARDS.filter(c =>
+            c.family !== activeDef.family && c.id !== slot.id);
+        if (!candidates.length) return false;
+        const pick = candidates[Math.floor(rng() * candidates.length)];
+        const optIdx = Math.floor(rng() * pick.options.length);
+        slot.altId  = pick.id;
+        slot.altOpt = optIdx;
+        slot.swap   = rng() < 0.5;
+    }
+    return true;
 }
 
 // --- game id codec ----------------------------------------------------------
 // Preset format: <levelChar><cardId>.<opt>-<cardId>.<opt>-...
 //   Example: "M11.0-23.2-4.1-9.3-21.0"
-// Custom format: "C<digitMin>_<digitMax>_<cardList>"
+// Custom format: "C<digitMin>_<digitMax>[Q<qpr>][X]_<cardList>"
 //   Example: "C1_7_5.1-12.2-23.0-31.2-17.1" → digits 1..7, 5 verifiers.
+// Extreme mode adds a decoy per verifier: each segment becomes
+//   <id>.<opt>.<altId>.<altOpt>.<swap>   (swap ∈ {0,1})
+// Preset extreme uses level char X. Custom extreme appends the X marker after
+// the optional Q suffix (e.g. "C1_5X_…" or "C1_5Q4X_…").
 // Self-describing and short enough for a URL.
-const LEVEL_CHAR = { EASY:'E', MEDIUM:'M', HARD:'H' };
-const CHAR_LEVEL = { E:'EASY',  M:'MEDIUM',  H:'HARD'  };
+const LEVEL_CHAR = { EASY:'E', MEDIUM:'M', HARD:'H', HARDPLUS:'P', EXTREME:'X' };
+const CHAR_LEVEL = { E:'EASY',  M:'MEDIUM',  H:'HARD',  P:'HARDPLUS',  X:'EXTREME' };
 
 function encodeGameId(puzzle) {
-    const body = puzzle.cards.map(({id, opt}) => `${id}.${opt}`).join('-');
+    const body = puzzle.cards.map(card => {
+        if (isExtremeCard(card)) {
+            return `${card.id}.${card.opt}.${card.altId}.${card.altOpt}.${card.swap ? 1 : 0}`;
+        }
+        return `${card.id}.${card.opt}`;
+    }).join('-');
     if (puzzle.level === 'CUSTOM') {
-        const { digitMin, digitMax, questionsPerRound } = puzzle.config;
+        const { digitMin, digitMax, questionsPerRound, extreme } = puzzle.config;
         // Only emit the Q suffix when it differs from the default (3); keeps
         // older shared IDs short and forward-compatible.
         const q = (questionsPerRound && questionsPerRound !== 3) ? `Q${questionsPerRound}` : '';
-        return `C${digitMin}_${digitMax}${q}_${body}`;
+        const x = extreme ? 'X' : '';
+        return `C${digitMin}_${digitMax}${q}${x}_${body}`;
     }
     return `${LEVEL_CHAR[puzzle.level]}${body}`;
 }
@@ -217,28 +350,31 @@ function decodeGameId(id) {
     const ch = id[0].toUpperCase();
 
     let level, body, customConfig = null;
+    let extreme = false;
     if (ch === 'C') {
-        // Custom: read the digit range (and optional questions-per-round)
-        // from the ID, reconfigure the runtime BEFORE looking up cards
-        // (pruned card sets differ by range).
+        // Custom: read the digit range (and optional questions-per-round, and
+        // optional extreme marker X) from the ID, reconfigure the runtime
+        // BEFORE looking up cards (pruned card sets differ by range).
         const rest = id.slice(1);
-        // Accept either "min_maxQqpr_cards" or legacy "min_max_cards".
-        const m = rest.match(/^(\d+)_(\d+)(?:Q(\d+))?_(.+)$/);
+        // Accept "min_max[Qqpr][X]_cards" — Q and X both optional, in that order.
+        const m = rest.match(/^(\d+)_(\d+)(?:Q(\d+))?(X)?_(.+)$/);
         if (!m) throw new Error('Malformed custom game id');
         const digitMin = parseInt(m[1]);
         const digitMax = parseInt(m[2]);
         const qpr      = m[3] ? parseInt(m[3]) : 3;
+        extreme        = !!m[4];
         if (!(digitMin >= 0 && digitMax > digitMin && digitMax <= 9)) {
             throw new Error('Custom digit range out of bounds');
         }
         if (!(qpr >= 1)) throw new Error('Custom questions/round out of bounds');
-        customConfig = { digitMin, digitMax, questionsPerRound: qpr };
+        customConfig = { digitMin, digitMax, questionsPerRound: qpr, extreme };
         reconfigureGame({ digitMin, digitMax });
         level = 'CUSTOM';
-        body = m[4];
+        body = m[5];
     } else if (ch in CHAR_LEVEL) {
         level = CHAR_LEVEL[ch];
         body  = id.slice(1);
+        extreme = !!(LEVELS[level] && LEVELS[level].extreme);
         // Preset levels assume the default config; if the runtime was last
         // reconfigured for a custom puzzle, restore it now.
         reconfigureGame({ digitMin: 1, digitMax: 5 });
@@ -247,18 +383,49 @@ function decodeGameId(id) {
     }
 
     const cards = body.split('-').map(part => {
-        const [cid, oi] = part.split('.').map(Number);
+        const nums = part.split('.').map(Number);
+        if (nums.length !== 2 && nums.length !== 5) {
+            throw new Error('Malformed verifier segment: ' + part);
+        }
+        const [cid, oi] = nums;
         if (!CARDS_BY_ID[cid]) throw new Error('Unknown card id: ' + cid);
         const opt = oi | 0;
         if (opt < 0 || opt >= CARDS_BY_ID[cid].options.length) {
             throw new Error('Invalid option index on card ' + cid);
         }
-        return { id: cid, opt };
+        const out = { id: cid, opt };
+        if (nums.length === 5) {
+            const [, , aid, aoi, swap] = nums;
+            if (!CARDS_BY_ID[aid]) throw new Error('Unknown decoy card id: ' + aid);
+            const aopt = aoi | 0;
+            if (aopt < 0 || aopt >= CARDS_BY_ID[aid].options.length) {
+                throw new Error('Invalid decoy option index on card ' + aid);
+            }
+            if (swap !== 0 && swap !== 1) {
+                throw new Error('Decoy swap bit must be 0 or 1');
+            }
+            out.altId = aid;
+            out.altOpt = aopt;
+            out.swap = swap === 1;
+        }
+        return out;
     });
     /* istanbul ignore if -- defensive: body.split('-') always yields ≥1 element so this trips only on truly malformed parsing earlier */
     if (cards.length < 1) {
         throw new Error('Game must have at least one verifier');
     }
+    // Segments must be uniform (all extreme or none), and that must agree
+    // with the top-level marker. Mixed encodings are nonsense; mismatches
+    // mean the id was edited by hand into an inconsistent state.
+    const allExtremeSeg  = cards.every(c => c.altId !== undefined);
+    const noneExtremeSeg = cards.every(c => c.altId === undefined);
+    if (!allExtremeSeg && !noneExtremeSeg) {
+        throw new Error('Mixed normal and extreme verifier segments');
+    }
+    if (extreme !== allExtremeSeg) {
+        throw new Error('Extreme marker disagrees with verifier segments');
+    }
+    const hardplus = !!(LEVELS[level] && LEVELS[level].hardplus);
     const puzzle = {
         level, seed: null, cards,
         config: customConfig
@@ -267,12 +434,16 @@ function decodeGameId(id) {
                 digitMax: customConfig.digitMax,
                 verifiers: cards.length,
                 questionsPerRound: customConfig.questionsPerRound,
+                extreme: customConfig.extreme,
+                hardplus: false,
               }
             : {
                 digitMin: GAME_CONFIG.digitMin,
                 digitMax: GAME_CONFIG.digitMax,
                 verifiers: cards.length,
                 questionsPerRound: GAME_CONFIG.questionsPerRound,
+                extreme,
+                hardplus,
               },
     };
     const sols = solutionsFor(puzzle);

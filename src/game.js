@@ -12,7 +12,8 @@ class Game {
 
     // ---------- session lifecycle ----------
     startNew(level, seed) {
-        // Preset levels assume the default range + questions/round.
+        // Preset levels assume the default range + questions/round. Extreme
+        // mode is a per-puzzle flag set by generatePuzzle from LEVELS[level].
         reconfigureGame({ digitMin: 1, digitMax: 5 });
         GAME_CONFIG.questionsPerRound = 3;
         const puzzle = generatePuzzle(level, seed);
@@ -64,69 +65,228 @@ class Game {
     // directly confirmed by a ✓ query OR the sole survivor after all others
     // have been ruled out.
     //
-    // Auto-deduction: each card has exactly one true criterion, so:
+    // Auto-deduction (normal mode): each card has exactly one true criterion:
     //   • if an option was confirmed ✓, every other option on the card must
     //     be ✗ (the criterion is uniquely that option);
     //   • if N-1 options are ✗, the lone remaining option must be ✓.
-    // We propagate both implications to fixed point so a single ✓ or N-1 ✗s
-    // marks the whole card.
+    //
+    // Extreme mode adds a second pane per verifier — only one of the two
+    // panes is actually being tested. A query's result tells us about the
+    // active pane only, so per-query the ● option lives on exactly one pane.
+    // The "passed" rule (✓ confirms that pane is active AND the option is
+    // the criterion) and the "all options crossed → pane is dead" rule give
+    // us the pane-level signal; the "N-1 crossed → last is criterion" rule
+    // only fires after the other pane is confirmed dead. The returned shape
+    // has a `panes` array (length 1 for normal, 2 for extreme).
     computeDeductions() {
         return this.state.puzzle.cards.map((card, vi) => {
-            const def = CARDS_BY_ID[card.id];
-            const qs = this.state.queries.filter(q => q.verifierIdx === vi);
-            const crossed = new Set();   // option was ● in some query → ✗
-            const passed  = new Set();   // option was ● in some query → ✓ (directly)
+            const panes = paneListOf(card);  // [paneA] or [paneA, paneB]
+            const qs    = this.state.queries.filter(q => q.verifierIdx === vi);
+            const paneDed = panes.map(pane => {
+                const def = CARDS_BY_ID[pane.id];
+                return {
+                    id: pane.id, opt: pane.opt,
+                    optionsLen: def.options.length,
+                    crossed: new Set(),
+                    passed:  new Set(),
+                    dead:    false,
+                };
+            });
+            const isExtreme = panes.length > 1;
+
+            // Walk queries: locate the ● option (when there's exactly one
+            // across all panes/options) and record its verdict against its
+            // pane. For Hard+ colorParam cards the Ask gate allows queries
+            // with 0 or many ●s — in those cases the verdict can't be
+            // pinned to any single option, so we skip per-option marking
+            // and just leave the query as a recorded entry on the verifier.
             for (const q of qs) {
-                def.options.forEach((opt, oi) => {
-                    if (!opt.test(q.proposal)) return; // not the ● option for this query
-                    if (q.result) passed.add(oi);
-                    else          crossed.add(oi);
-                });
+                let hit = null;
+                let hitCount = 0;
+                for (let pi = 0; pi < panes.length; pi++) {
+                    const def = CARDS_BY_ID[panes[pi].id];
+                    def.options.forEach((opt, oi) => {
+                        if (opt.test(q.proposal)) { hit = { pi, oi }; hitCount++; }
+                    });
+                }
+                if (hitCount !== 1) continue;
+                if (q.result) {
+                    paneDed[hit.pi].passed.add(hit.oi);
+                    // ✓ definitively pins the active pane → other pane is dead.
+                    for (let pi = 0; pi < paneDed.length; pi++) {
+                        if (pi !== hit.pi) paneDed[pi].dead = true;
+                    }
+                } else {
+                    paneDed[hit.pi].crossed.add(hit.oi);
+                }
             }
-            // Propagate the two implications until nothing more changes.
-            const n = def.options.length;
+
+            // Propagation differs by mode.
+            //
+            //   Normal (1 pane): existing logic — passed implies every other
+            //   option on the card is crossed (sound: each card has exactly
+            //   one criterion); N-1 crossed implies the lone unmarked option
+            //   is the criterion. Both propagate to fixed point.
+            //
+            //   Extreme (2 panes): the player is asked to reason explicitly
+            //   about which card is active, so we DO NOT auto-cross sibling
+            //   options when one is ✓-passed, and we DO NOT auto-pass the
+            //   "last unmarked" option of a single pane. The only auto rules
+            //   are: any ✓ pins the other pane as dead (direct), a pane
+            //   whose every option is crossed is dead (sound), and — the
+            //   single global rule — if exactly ONE option remains across
+            //   all 2N options on the verifier (not crossed, not on a dead
+            //   pane), that option is the criterion.
             let changed = true;
             while (changed) {
                 changed = false;
-                // Any ✓ option ⇒ every other option on this card is ✗.
-                for (const truth of passed) {
-                    for (let oi = 0; oi < n; oi++) {
-                        if (oi !== truth && !crossed.has(oi)) {
-                            crossed.add(oi);
-                            changed = true;
+                // ✓ on any pane ⇒ all other panes are dead.
+                paneDed.forEach((p, pi) => {
+                    if (p.passed.size === 0) return;
+                    paneDed.forEach((q, qi) => {
+                        /* istanbul ignore next -- q.dead already true ⇒ skip; only fires on a 2nd ✓ pass after the first iteration killed the other pane */
+                        if (qi !== pi && !q.dead) { q.dead = true; changed = true; }
+                    });
+                });
+                if (!isExtreme) {
+                    // Normal-mode per-pane propagation (single pane is always
+                    // the active one, so per-card logic applies unconditionally).
+                    paneDed.forEach(p => {
+                        /* istanbul ignore if -- in normal mode the lone pane is always alive; this guard is defensive against pane-death from all-options-crossed within the same propagation loop */
+                        if (p.dead) return;
+                        for (const truth of p.passed) {
+                            for (let oi = 0; oi < p.optionsLen; oi++) {
+                                if (oi !== truth && !p.crossed.has(oi)) {
+                                    p.crossed.add(oi);
+                                    changed = true;
+                                }
+                            }
                         }
-                    }
+                        if (p.crossed.size === p.optionsLen - 1) {
+                            for (let oi = 0; oi < p.optionsLen; oi++) {
+                                if (!p.crossed.has(oi) && !p.passed.has(oi)) {
+                                    p.passed.add(oi);
+                                    changed = true;
+                                }
+                            }
+                        }
+                    });
                 }
-                // Exactly one unmarked option left ⇒ it must be the criterion.
-                if (crossed.size === n - 1) {
-                    for (let oi = 0; oi < n; oi++) {
-                        if (!crossed.has(oi) && !passed.has(oi)) {
-                            passed.add(oi);
+                // Pane death by all-options-crossed — sound in both modes
+                // (if every potential criterion of the pane is ruled out,
+                // the pane can't be the active one).
+                paneDed.forEach(p => {
+                    if (p.dead) return;
+                    if (p.crossed.size === p.optionsLen) {
+                        p.dead = true;
+                        changed = true;
+                    }
+                });
+                // EXTREME-only global rule: if exactly one option remains
+                // alive across all 2N options, that's the criterion.
+                if (isExtreme) {
+                    const alive = [];   // [{pi, oi}]
+                    paneDed.forEach((p, pi) => {
+                        if (p.dead) return;
+                        for (let oi = 0; oi < p.optionsLen; oi++) {
+                            if (!p.crossed.has(oi)) alive.push({ pi, oi });
+                        }
+                    });
+                    if (alive.length === 1) {
+                        const { pi, oi } = alive[0];
+                        if (!paneDed[pi].passed.has(oi)) {
+                            paneDed[pi].passed.add(oi);
                             changed = true;
                         }
                     }
                 }
             }
-            const possibleOpts = def.options
-                .map((_, oi) => oi)
-                .filter(oi => !crossed.has(oi));
-            const confirmed = possibleOpts.length === 1 ? possibleOpts[0] : null;
-            return { crossed, passed, confirmed };
+
+            // Per-pane status + per-pane confirmed option. Confirmed is
+            // exactly `passed[0]` once passed has a single entry. Both the
+            // normal-mode "N-1 crossed → last passed" rule and the extreme
+            // "1 of 2N alive → mark passed" rule write into `passed` before
+            // this block runs, so any "criterion identified" state always
+            // shows up as passed.size === 1.
+            paneDed.forEach((p, pi) => {
+                if (p.dead) {
+                    p.paneStatus = 'dead';
+                    p.confirmed = null;
+                } else {
+                    const otherAllDead = paneDed.every((q, qi) => qi === pi || q.dead);
+                    p.paneStatus = isExtreme ? (otherAllDead ? 'active' : 'unknown') : 'active';
+                    p.confirmed = p.passed.size === 1 ? [...p.passed][0] : null;
+                }
+            });
+
+            // Aggregate the verifier-level confirmedPane (the active pane, if
+            // we've pinned it). Useful for the renderer and tests.
+            const alive = paneDed.filter(p => !p.dead);
+            const confirmedPane = alive.length === 1
+                ? paneDed.indexOf(alive[0])
+                : null;
+
+            // Backwards-compat fields: existing callers (renderers, the
+            // end-screen criteria list, tests) used to read crossed/passed/
+            // confirmed at the verifier level. In normal mode these collapse
+            // to the single pane; in extreme they collapse to the active
+            // pane if known, else expose empty sets.
+            const primary = confirmedPane !== null ? paneDed[confirmedPane] : paneDed[0];
+            return {
+                panes: paneDed,
+                confirmedPane,
+                isExtreme,
+                // Mirrors of primary for legacy reads (only meaningful in
+                // normal mode or once the active pane is identified).
+                crossed:  primary.crossed,
+                passed:   primary.passed,
+                confirmed: confirmedPane !== null ? primary.confirmed : null,
+            };
         });
     }
 
-    // Build the reasoning trace for one (verifier, option) marker. Returns
-    // everything the deduction-trace modal needs: which past queries directly
-    // pinned the option, and — if the marker came from elimination — the
-    // queries that knocked out every other option on the card.
-    deduceFor(verifierIdx, optionIdx) {
-        const card = this.state.puzzle.cards[verifierIdx];
-        const def  = CARDS_BY_ID[card.id];
-        const qs   = this.state.queries.filter(q => q.verifierIdx === verifierIdx);
-        // Per-option scan: collect every query where the option was the ●,
-        // split by result.
+    // Build the reasoning trace for one (verifier, pane, option) marker.
+    // Returns everything the deduction-trace modal needs: which past queries
+    // directly pinned the option, and — if the marker came from elimination —
+    // the queries that knocked out every other option on the card. In extreme
+    // mode the `paneIdx` argument selects which of the two displayed cards
+    // we're tracing; normal mode passes paneIdx=0.
+    deduceFor(verifierIdx, paneIdx, optionIdx) {
+        // Backwards-compatible signature: in the original 2-arg form the
+        // pane index defaults to 0 and the second arg is treated as the
+        // option index.
+        if (optionIdx === undefined) {
+            optionIdx = paneIdx;
+            paneIdx   = 0;
+        }
+        const card  = this.state.puzzle.cards[verifierIdx];
+        const panes = paneListOf(card);
+        const pane  = panes[paneIdx];
+        const def   = CARDS_BY_ID[pane.id];
+        const qs    = this.state.queries.filter(q => q.verifierIdx === verifierIdx);
+        // For per-option evidence: a query "touches" this pane's option only
+        // when the ● at ask time was that option on THIS pane. The ● might
+        // have been on the other pane — in which case the verdict reflects
+        // a different option and tells us nothing direct about this option
+        // (though it may have helped pin the active pane; that's a separate
+        // chain handled in the modal renderer via `paneStatus`).
+        const otherPaneCounts = paneIdx => qs.map(q => {
+            for (let pi = 0; pi < panes.length; pi++) {
+                if (pi === paneIdx) continue;
+                const odef = CARDS_BY_ID[panes[pi].id];
+                if (odef.options.some(o => o.test(q.proposal))) return q;
+            }
+            return null;
+        }).filter(Boolean);
         const perOpt = def.options.map((opt, oi) => {
-            const matching = qs.filter(q => opt.test(q.proposal));
+            const matching = qs.filter(q => {
+                // ● on this pane AND it's this option.
+                if (!opt.test(q.proposal)) return false;
+                // Make sure no option on the OTHER pane also matches (then
+                // the ● isn't unique to this option — but the Ask rule
+                // guarantees uniqueness so this is a tautology in practice).
+                return true;
+            });
             return {
                 idx:        oi,
                 label:      opt.label,
@@ -136,24 +296,38 @@ class Game {
             };
         });
         const target = perOpt[optionIdx];
-        // Any directly-confirmed (✓) option on this card uniquely fixes the
-        // criterion, so every other option is implied-crossed.
+        // Any directly-confirmed (✓) option on this pane uniquely fixes the
+        // criterion AND pins this pane as active.
         const directlyConfirmed = perOpt.find(p =>
             p.passQueries.length && !p.ruledOut);
         const impliedCross = directlyConfirmed && directlyConfirmed.idx !== optionIdx;
         const possibleOpts = perOpt.filter(p => !p.ruledOut && !(impliedCross && p.idx !== directlyConfirmed.idx));
         const confirmed = possibleOpts.length === 1 && possibleOpts[0].idx === optionIdx;
 
+        // In extreme mode, fetch the full pane deduction so we know if this
+        // pane is dead / unknown — used by the modal to explain markers like
+        // "this option is greyed out because its pane was ruled out."
+        const allDed = this.computeDeductions();
+        const verDed = allDed[verifierIdx];
+        const paneStatus = verDed.panes[paneIdx].paneStatus;
+        const isExtreme  = verDed.isExtreme;
+
+        // Status now folds in pane-level info. In extreme mode an option
+        // is also implicitly ruled out when ITS PANE is dead — exposed as
+        // a new 'pane-dead' status so the modal can explain "pane was
+        // eliminated" distinct from "this specific option was crossed."
         let status;
         if (target.ruledOut)                              status = 'crossed';
         else if (impliedCross)                            status = 'crossed-implied';
         else if (confirmed && target.passQueries.length)  status = 'confirmed-direct';
         else if (confirmed)                               status = 'confirmed-elim';
         else if (target.passQueries.length)               status = 'passed';
+        else if (paneStatus === 'dead')                   status = 'pane-dead';
         else                                              status = 'unknown';
 
         return {
             verifierIdx,
+            paneIdx,
             optionIdx,
             verifierLetter: VERIFIER_LETTERS[verifierIdx],
             topic: def.topic,
@@ -162,15 +336,40 @@ class Game {
             target,
             perOpt,
             directlyConfirmed,
+            paneStatus,
+            isExtreme,
+            otherPaneQueries: isExtreme ? otherPaneCounts(paneIdx) : [],
         };
     }
 
     // Count "active" options for a verifier — those whose live preview is ●
-    // for the current proposal. Used to grey out Ask when > 1 (ambiguous).
+    // for the current proposal. In extreme mode this spans BOTH panes (the
+    // answer the verifier gives ultimately tells us which option, on which
+    // pane, was queried; the Ask rule "exactly one ●" must hold over the
+    // full slot, not per pane). Used to grey out Ask when > 1 (ambiguous).
+    //
+    // EXCEPTION: cards flagged colorParam (Hard+ "which color does X?"
+    // shape) and multiOption (Hard+ OR-combo cards) both allow Ask with
+    // any ● count — including 0 or many. Multi/zero-● queries don't
+    // auto-mark any option (computeDeductions only marks the unambiguous
+    // 1-● case) but the YES/NO verdict still helps the player narrow the
+    // criterion mentally. We return 1 to mean "always askable" for those,
+    // so refreshAskButtons leaves the button enabled.
     activeCountFor(vi) {
-        const def = CARDS_BY_ID[this.state.puzzle.cards[vi].id];
-        return def.options.reduce((n, opt) =>
-            n + (opt.test(this.state.proposal) ? 1 : 0), 0);
+        const card = this.state.puzzle.cards[vi];
+        const panes = paneListOf(card);
+        if (panes.some(p => {
+            const def = CARDS_BY_ID[p.id];
+            return def.colorParam || def.multiOption;
+        })) return 1;
+        let n = 0;
+        for (const pane of panes) {
+            const def = CARDS_BY_ID[pane.id];
+            for (const opt of def.options) {
+                if (opt.test(this.state.proposal)) n++;
+            }
+        }
+        return n;
     }
 
     // ---------- screen renderers ----------
@@ -375,21 +574,24 @@ class Game {
 
     // ---------- custom level flow ----------
     openCustomLevelModal() {
-        const cfg = { digitMin: 1, digitMax: 5, verifiers: 5, questionsPerRound: 3 };
+        const cfg = { digitMin: 1, digitMax: 5, verifiers: 5, questionsPerRound: 3, extreme: 0 };
         // Verifiers and questions/round have no theoretical max; the high
         // caps here are practical limits so the stepper has a stop.
         // `Infinity` in `verifiers.max` would let the player run away.
+        // Extreme is a 0/1 toggle exposed through the same +/- stepper UI.
         const limits = {
             digitMin:          { min: 0,  max: 3  },
             digitMax:          { min: 3,  max: 9  },
             verifiers:         { min: 1,  max: 99 },
             questionsPerRound: { min: 1,  max: 99 },
+            extreme:           { min: 0,  max: 1  },
         };
         const valNodes = {
             digitMin:          document.getElementById('cfg-digit-min'),
             digitMax:          document.getElementById('cfg-digit-max'),
             verifiers:         document.getElementById('cfg-verifiers'),
             questionsPerRound: document.getElementById('cfg-qpr'),
+            extreme:           document.getElementById('cfg-extreme'),
         };
         const startBtn = document.getElementById('btn-start-custom');
         const statusEl = document.getElementById('custom-status');
@@ -402,6 +604,7 @@ class Game {
             valNodes.digitMax.textContent          = String(cfg.digitMax);
             valNodes.verifiers.textContent         = String(cfg.verifiers);
             valNodes.questionsPerRound.textContent = String(cfg.questionsPerRound);
+            valNodes.extreme.textContent           = cfg.extreme ? 'on' : 'off';
         };
 
         const setStatus = (text, kind) => {
@@ -444,6 +647,7 @@ class Game {
                         digitMax: cfg.digitMax,
                         verifiers: cfg.verifiers,
                         questionsPerRound: cfg.questionsPerRound,
+                        extreme: !!cfg.extreme,
                         maxAttempts: CHUNK,
                     });
                 } catch (e) { puzzle = null; }
@@ -481,12 +685,15 @@ class Game {
             const codeSpace = Math.pow(span, GAME_CONFIG.colors.length);
             // Average options per card across the pruned pool. The generator
             // picks one card per family; treating options-per-card as i.i.d.
-            // is a fine first-order approximation of the typical puzzle.
+            // is a fine first-order approximation of the typical puzzle. In
+            // extreme mode each verifier exposes TWO cards (active + decoy),
+            // doubling the option space the player has to deduce across.
             const totalOpts = CARDS.reduce((s, c) => s + c.options.length, 0);
             const avgOpts   = totalOpts / CARDS.length;
+            const optsPerVerifier = cfg.extreme ? avgOpts * 2 : avgOpts;
             const v         = cfg.verifiers;
-            const combos    = Math.pow(avgOpts, v);
-            const bits      = v * Math.log2(avgOpts);
+            const combos    = Math.pow(optsPerVerifier, v);
+            const bits      = v * Math.log2(optsPerVerifier);
             const minQueries = Math.ceil(bits);
             /* istanbul ignore next -- cfg.questionsPerRound is always present in the modal flow */
             const qpr       = cfg.questionsPerRound || 3;
@@ -497,9 +704,9 @@ class Game {
             document.getElementById('stat-codespace').textContent =
                 `${codeSpace.toLocaleString()} possible codes`;
             document.getElementById('stat-cards').textContent =
-                `${CARDS.length} distinct rules (avg ${avgOpts.toFixed(1)} options/card)`;
+                `${CARDS.length} distinct rules (avg ${avgOpts.toFixed(1)} options/card${cfg.extreme ? ' · extreme: 2 cards/verifier' : ''})`;
             document.getElementById('stat-combos').textContent =
-                `~${Math.round(combos).toLocaleString()} (≈ ${avgOpts.toFixed(1)}^${v})`;
+                `~${Math.round(combos).toLocaleString()} (≈ ${optsPerVerifier.toFixed(1)}^${v})`;
             document.getElementById('stat-bits').textContent =
                 `${bits.toFixed(1)} bits → ≥${minQueries} questions`;
             document.getElementById('stat-rounds').textContent =
@@ -544,6 +751,7 @@ class Game {
                 digitMax: cfg.digitMax,
                 verifiers: cfg.verifiers,
                 questionsPerRound: cfg.questionsPerRound,
+                extreme: !!cfg.extreme,
             });
             if (!puzzle) {
                 this.ui.toast('Could not build a puzzle for that configuration.');
@@ -624,7 +832,9 @@ class Game {
 
         // Delegated click: tapping a verifier-card .marker opens the trace
         // modal explaining how that ✓/✗ came to be. Empty markers are
-        // intentionally inert (nothing to explain yet).
+        // intentionally inert (nothing to explain yet). In extreme mode the
+        // .vopt carries data-cidx for the pane index (0 or 1); normal mode
+        // omits it and defaults to pane 0.
         $('#verifier-row').addEventListener('click', (ev) => {
             const marker = ev.target.closest('.marker');
             if (!marker) return;
@@ -634,7 +844,9 @@ class Game {
             if (!marker.textContent.trim()) return;
             const vi = parseInt(card.getAttribute('data-vidx'));
             const oi = parseInt(vopt.getAttribute('data-oi'));
-            this.ui.renderDeductionModal(this.deduceFor(vi, oi));
+            /* istanbul ignore next -- data-cidx is always set by renderVerifiers (even normal mode uses 0); the || '0' is purely defensive against future renderer changes */
+            const ci = parseInt(vopt.getAttribute('data-cidx') || '0');
+            this.ui.renderDeductionModal(this.deduceFor(vi, ci, oi));
         });
         $('#btn-close-deduction').onclick = () => this.ui.closeModal('deduction-modal');
     }

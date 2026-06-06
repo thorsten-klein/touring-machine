@@ -526,6 +526,109 @@ body {
 .verifier-card .vqlog .fail { color: var(--fail-color); }
 .verifier-card .vqlog .vqlog-rule { color: var(--text-color); }
 
+/* --- Extreme mode verifier layout --- */
+/* Each extreme verifier wraps its TWO competing cards in .vcard-panes; each
+   pane gets its own topic header and options list, separated by a divider so
+   the player can see them as two distinct rules. */
+.verifier-card.extreme .vcard-panes {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+.verifier-card.extreme .vcard-pane {
+    border: 1px dashed var(--border-color);
+    border-radius: 6px;
+    padding: 0.4rem 0.5rem;
+    background: rgba(255, 255, 255, 0.015);
+    position: relative;
+}
+.verifier-card.extreme .vpane-topic {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-bottom: 0.3rem;
+    line-height: 1.25;
+    white-space: nowrap;
+}
+/* Tag in the head explaining the slot is extreme. */
+.verifier-card.extreme .vtopic-extreme {
+    color: var(--text-muted);
+    font-size: 0.74rem;
+    font-style: italic;
+    white-space: normal;
+}
+.verifier-card.extreme .extreme-tag {
+    display: inline-block;
+    font-family: var(--font-display);
+    font-size: 0.65rem;
+    letter-spacing: 1.5px;
+    background: var(--primary-color);
+    color: var(--bg-color);
+    padding: 0.05rem 0.4rem;
+    border-radius: 3px;
+    margin-right: 0.35rem;
+    font-style: normal;
+    vertical-align: 1px;
+}
+/* Dead pane — entire card has been ruled out as the active criterion. */
+.verifier-card.extreme .vcard-pane.pane-dead {
+    background: repeating-linear-gradient(
+        135deg,
+        rgba(255, 255, 255, 0.02),
+        rgba(255, 255, 255, 0.02) 6px,
+        rgba(255, 100, 100, 0.06) 6px,
+        rgba(255, 100, 100, 0.06) 12px);
+    border-style: solid;
+    border-color: rgba(255, 100, 100, 0.35);
+    opacity: 0.72;
+}
+.verifier-card.extreme .vcard-pane.pane-dead .vpane-topic {
+    text-decoration: line-through;
+    color: var(--fail-color);
+}
+.verifier-card.extreme .vcard-pane.pane-dead .vopt-label {
+    color: var(--text-dim);
+}
+/* "Greyed" marker for options on a dead pane that haven't been individually
+   crossed — distinguishes pane-level elimination from per-option elimination. */
+.verifier-card.extreme .vopt.pane-dead-opt .marker {
+    border-color: var(--text-dim);
+    color: var(--text-dim);
+    background: transparent;
+}
+
+/* Pane tag in deduction modal subtitle ("card A" / "card B"). */
+.pane-tag {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    background: rgba(0, 212, 170, 0.15);
+    color: var(--primary-color);
+    padding: 0.05rem 0.35rem;
+    border-radius: 3px;
+}
+
+/* End-screen decoy line under the active criterion. */
+.end-decoy {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 0.15rem;
+    margin-left: 1.3rem;
+    font-style: italic;
+}
+.end-decoy .decoy-tag {
+    display: inline-block;
+    font-family: var(--font-display);
+    font-size: 0.62rem;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    background: rgba(255, 100, 100, 0.18);
+    color: var(--fail-color);
+    padding: 0.05rem 0.32rem;
+    border-radius: 3px;
+    font-style: normal;
+    margin-right: 0.35rem;
+    vertical-align: 1px;
+}
+
 /* --- Proposal dials --- */
 #proposal-dials, #submit-dials {
     display: flex;

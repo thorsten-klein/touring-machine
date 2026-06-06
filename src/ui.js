@@ -214,62 +214,99 @@ class UI {
         const row = $('#verifier-row');
         row.innerHTML = '';
         puzzle.cards.forEach((card, i) => {
-            const def = CARDS_BY_ID[card.id];
             const verifierQueries = queries.filter(q => q.verifierIdx === i);
-            const exhausted = !!deductions[i] && deductions[i].confirmed !== null;
+            const verDed = deductions[i] || { panes: [], isExtreme: false };
+            const panes  = paneListOf(card);
+            const isExtreme = panes.length > 1;
 
-            const optsList = el('ul', { class: 'voptions' });
-            def.options.forEach((opt, oi) => {
-                const ded = deductions[i] || { crossed: new Set(), passed: new Set(), confirmed: null };
-                const isCross = ded.crossed.has(oi);
-                const isPassed = ded.passed && ded.passed.has(oi);
-                const isConfirmed = ded.confirmed === oi;
-                const title = isConfirmed ? 'This must be the criterion'
-                            : isCross    ? 'Past query: FAIL on this rule'
-                            :               'Still possible';
-                // Right-side indicator: just the live ← arrow whenever the
-                // current number activates this option, regardless of any
-                // past verdict on the row. Past verdicts live on the LEFT
-                // marker (✓/✗).
-                const wouldPass = proposal && opt.test(proposal);
-                const preview = el('span', {
-                    class: 'preview' + (wouldPass ? ' pass' : ' hidden-preview'),
-                    title: wouldPass ? 'Current number would PASS this rule' : '',
-                    html: wouldPass ? PREVIEW_ARROW_SVG : '',
+            // Build one .vcard-pane per pane. In normal mode there's a single
+            // pane and the layout looks identical to the pre-extreme one
+            // (head includes the topic). In extreme mode, the topic moves
+            // INTO each pane so the player can read the two competing
+            // criteria side-by-side under one shared "Verifier A" header.
+            const buildPane = (paneIdx) => {
+                const pane = panes[paneIdx];
+                const def  = CARDS_BY_ID[pane.id];
+                const pded = (verDed.panes && verDed.panes[paneIdx]) || {
+                    crossed: new Set(), passed: new Set(), confirmed: null, paneStatus: 'active',
+                };
+                const paneDead = pded.paneStatus === 'dead';
+
+                const optsList = el('ul', { class: 'voptions' });
+                def.options.forEach((opt, oi) => {
+                    const isCross    = pded.crossed.has(oi);
+                    const isPassed   = pded.passed && pded.passed.has(oi);
+                    const isConfirmed = pded.confirmed === oi;
+                    const title = paneDead
+                                ? 'This card was ruled out as the active criterion'
+                                : isConfirmed ? 'This must be the criterion'
+                                : isCross    ? 'Past query: FAIL on this rule'
+                                :               'Still possible';
+                    const wouldPass = proposal && opt.test(proposal);
+                    const preview = el('span', {
+                        class: 'preview' + (wouldPass ? ' pass' : ' hidden-preview'),
+                        title: wouldPass ? 'Current number would PASS this rule' : '',
+                        html: wouldPass ? PREVIEW_ARROW_SVG : '',
+                    });
+
+                    // Marker semantics:
+                    //   ✓ confirmed/passed,  ✗ ruled out by a past query,
+                    //   ⊘ pane is dead (extreme mode only — entire card is out).
+                    const markerChar = (isConfirmed || isPassed) ? '✓'
+                                     : isCross                   ? '✗'
+                                     : paneDead                  ? '⊘'
+                                     :                             '';
+                    optsList.appendChild(el('li',
+                        { class: 'vopt'
+                            + (isConfirmed ? ' confirmed' : '')
+                            + (isCross    ? ' ruledout' : '')
+                            + (paneDead && !isCross && !isConfirmed && !isPassed ? ' pane-dead-opt' : ''),
+                          'data-vidx': i, 'data-oi': oi, 'data-cidx': paneIdx,
+                          title },
+                        el('span', { class: 'marker' }, markerChar),
+                        el('span', { class: 'vopt-label' }, labelToColoredNodes(opt.label)),
+                        preview,
+                    ));
                 });
 
-                // Left marker reflects accumulated query knowledge:
-                //   ✓ confirmed / passed,   ✗ ruled out by a past query.
-                // We deliberately don't apply ANY "ruled out" styling to the
-                // row itself (no strike-through, no dimming) — only the
-                // marker itself signals the verdict.
-                const markerChar = (isConfirmed || isPassed) ? '✓'
-                                 : isCross                   ? '✗'
-                                 :                             '';
-                const li = el('li',
-                    { class: 'vopt'
-                        + (isConfirmed ? ' confirmed' : '')
-                        + (isCross    ? ' ruledout' : ''),
-                      'data-vidx': i, 'data-oi': oi,
-                      title },
-                    el('span', { class: 'marker' }, markerChar),
-                    el('span', { class: 'vopt-label' }, labelToColoredNodes(opt.label)),
-                    preview,
+                if (isExtreme) {
+                    // Two-pane layout: each pane gets its own topic header.
+                    return el('div',
+                        { class: 'vcard-pane' + (paneDead ? ' pane-dead' : ''),
+                          'data-cidx': paneIdx },
+                        el('div', { class: 'vpane-topic' }, labelToColoredNodes(def.topic)),
+                        optsList,
+                    );
+                }
+                // Normal mode: no pane wrapper, options list goes straight in.
+                return optsList;
+            };
+
+            const head = isExtreme
+                ? el('div', { class: 'vcard-head' },
+                    el('div', { class: 'vletter' }, VERIFIER_LETTERS[i]),
+                    el('div', { class: 'vtopic vtopic-extreme' },
+                        el('span', { class: 'extreme-tag' }, 'EXTREME'),
+                        ' — one of the two cards below is real'),
+                    el('button', { class: 'vbtn', 'data-ask': i,
+                        onclick: () => onAsk(i)
+                    }, 'Ask'),
+                )
+                : el('div', { class: 'vcard-head' },
+                    el('div', { class: 'vletter' }, VERIFIER_LETTERS[i]),
+                    el('div', { class: 'vtopic' }, labelToColoredNodes(CARDS_BY_ID[panes[0].id].topic)),
+                    el('button', { class: 'vbtn', 'data-ask': i,
+                        onclick: () => onAsk(i)
+                    }, 'Ask'),
                 );
-                optsList.appendChild(li);
-            });
 
-            const head = el('div', { class: 'vcard-head' },
-                el('div', { class: 'vletter' }, VERIFIER_LETTERS[i]),
-                el('div', { class: 'vtopic' }, labelToColoredNodes(def.topic)),
-                el('button', { class: 'vbtn', 'data-ask': i,
-                    onclick: () => onAsk(i)
-                }, 'Ask'),
-            );
-
-            const card_el = el('div', { class: 'verifier-card', 'data-vidx': i },
+            const card_el = el('div',
+                { class: 'verifier-card' + (isExtreme ? ' extreme' : ''),
+                  'data-vidx': i },
                 head,
-                optsList,
+                ...(isExtreme
+                    ? [el('div', { class: 'vcard-panes' }, buildPane(0), buildPane(1))]
+                    : [buildPane(0)]),
             );
 
             if (verifierQueries.length) {
@@ -277,11 +314,16 @@ class UI {
                 verifierQueries.forEach(q => {
                     // The "active" option at ask time is the one whose
                     // predicate matched the number — by the 1-● Ask rule
-                    // there's always exactly one. Show its label so the
-                    // log reads as a complete deduction sentence.
-                    const activeOpts = def.options.filter(o => o.test(q.proposal));
-                    const activeLabel = activeOpts.length === 1
-                        ? activeOpts[0].label : null;
+                    // there's always exactly one. In extreme mode we scan
+                    // both panes' options.
+                    let activeLabel = null, found = 0;
+                    for (const pane of panes) {
+                        const pdef = CARDS_BY_ID[pane.id];
+                        for (const o of pdef.options) {
+                            if (o.test(q.proposal)) { activeLabel = o.label; found++; }
+                        }
+                    }
+                    if (found !== 1) activeLabel = null;
                     const row = el('div', {},
                         `Round ${q.round}: `,
                         formatProposalNode(q.proposal),
@@ -321,29 +363,33 @@ class UI {
     }
 
     // Recompute the live preview marker on every verifier option without
-    // rebuilding the whole verifier row. Cheap; safe to call on each dial tick.
+    // rebuilding the whole verifier row. Cheap; safe to call on each dial
+    // tick. In extreme mode both panes get scanned.
     updateVerifierPreviews(puzzle, deductions, proposal) {
         puzzle.cards.forEach((card, i) => {
-            const def = CARDS_BY_ID[card.id];
-            const ded = deductions[i] || { crossed: new Set(), passed: new Set(), confirmed: null };
-            def.options.forEach((opt, oi) => {
-                const node = document.querySelector(
-                    `.verifier-card[data-vidx="${i}"] .vopt[data-oi="${oi}"] .preview`);
-                if (!node) return;
-                // Right side only ever shows the live ← arrow when the
-                // current number activates this option, regardless of any
-                // past verdict. Past verdicts (✓/✗) live in the LEFT marker,
-                // which is set in renderVerifiers and not touched on ticks.
-                const ok = !!opt.test(proposal);
-                if (ok) {
-                    node.className = 'preview pass';
-                    node.innerHTML = PREVIEW_ARROW_SVG;
-                    node.title = 'Current number would PASS this rule';
-                } else {
-                    node.className = 'preview hidden-preview';
-                    node.innerHTML = '';
-                    node.title = '';
-                }
+            const panes = paneListOf(card);
+            panes.forEach((pane, pi) => {
+                const def = CARDS_BY_ID[pane.id];
+                def.options.forEach((opt, oi) => {
+                    // The non-extreme selector form (no data-cidx) is the
+                    // hot path on every dial tick in normal-mode games.
+                    /* istanbul ignore next -- both branches are exercised across the suite; nyc occasionally misses the conditional itself in browser-instrumented runs */
+                    const sel = panes.length > 1
+                        ? `.verifier-card[data-vidx="${i}"] .vopt[data-cidx="${pi}"][data-oi="${oi}"] .preview`
+                        : `.verifier-card[data-vidx="${i}"] .vopt[data-oi="${oi}"] .preview`;
+                    const node = document.querySelector(sel);
+                    if (!node) return;
+                    const ok = !!opt.test(proposal);
+                    if (ok) {
+                        node.className = 'preview pass';
+                        node.innerHTML = PREVIEW_ARROW_SVG;
+                        node.title = 'Current number would PASS this rule';
+                    } else {
+                        node.className = 'preview hidden-preview';
+                        node.innerHTML = '';
+                        node.title = '';
+                    }
+                });
             });
         });
     }
@@ -386,11 +432,18 @@ class UI {
             ));
         } else {
             queries.forEach(q => {
-                const def = CARDS_BY_ID[puzzle.cards[q.verifierIdx].id];
-                // The ● option at ask time — guaranteed unique by the 1-●
-                // Ask rule, so this never shows '—' for a real query.
-                const activeOpts = def.options.filter(o => o.test(q.proposal));
-                const activeLabel = activeOpts.length === 1 ? activeOpts[0].label : null;
+                // The ● option at ask time — guaranteed unique across both
+                // panes by the 1-● Ask rule, so this never shows '—' for a
+                // real query. In extreme mode we scan both panes.
+                const panes = paneListOf(puzzle.cards[q.verifierIdx]);
+                let activeLabel = null, found = 0;
+                for (const pane of panes) {
+                    const def = CARDS_BY_ID[pane.id];
+                    for (const o of def.options) {
+                        if (o.test(q.proposal)) { activeLabel = o.label; found++; }
+                    }
+                }
+                if (found !== 1) activeLabel = null;
                 body.appendChild(el('tr', {},
                     el('td', { class: 'col-round' }, String(q.round)),
                     el('td', { class: 'prop-cell' }, formatProposalNode(q.proposal)),
@@ -495,6 +548,14 @@ class UI {
         sub.appendChild(el('span', { class: 'verifier-tag' }, `Verifier ${trace.verifierLetter}`));
         sub.appendChild(document.createTextNode(' · '));
         sub.appendChild(labelToColoredNodes(trace.label));
+        // Extreme-mode subtitle decoration: tag the option with its pane
+        // ("card A" / "card B") so the player can map back to what they
+        // see on the verifier slot.
+        if (trace.isExtreme) {
+            sub.appendChild(document.createTextNode(' · '));
+            sub.appendChild(el('span', { class: 'pane-tag' },
+                `card ${trace.paneIdx === 0 ? 'A' : 'B'}`));
+        }
 
         const status = $('#ded-status');
         status.innerHTML = '';
@@ -570,6 +631,16 @@ class UI {
             body.appendChild(el('p', { class: 'ded-explainer' },
                 'Every other option on this card has been ruled out by a past query, so this one must be the criterion:'));
             body.appendChild(this._renderEliminationList(others.filter(p => p.ruledOut), evidenceRow));
+            return this.openModal('deduction-modal');
+        }
+
+        if (trace.status === 'pane-dead') {
+            status.className = 'ded-status is-no';
+            status.textContent = '⊘ This card was eliminated as the active criterion.';
+            body.appendChild(el('p', { class: 'ded-explainer' },
+                'In Extreme mode each verifier shows two cards but tests only one. ' +
+                'Past queries have ruled out every option on this card as the criterion, ' +
+                'so this whole card cannot be the one being tested — making every option on it moot.'));
             return this.openModal('deduction-modal');
         }
 
@@ -717,12 +788,27 @@ class UI {
         puzzle.cards.forEach((card, i) => {
             const def = CARDS_BY_ID[card.id];
             const opt = def.options[card.opt];
-            list.appendChild(el('li', {},
+            const li = el('li', {},
                 el('span', { class: 'verifier-tag' }, VERIFIER_LETTERS[i]),
                 labelToColoredNodes(def.topic),
                 ': ',
                 el('strong', {}, labelToColoredNodes(opt.label)),
-            ));
+            );
+            // Extreme: also show the decoy that was sitting next to the
+            // active criterion. Helps the player understand what they were
+            // fighting against, especially when they fell for the bluff.
+            if (card.altId !== undefined) {
+                const adef = CARDS_BY_ID[card.altId];
+                const aopt = adef.options[card.altOpt];
+                li.appendChild(el('div', { class: 'end-decoy' },
+                    el('span', { class: 'decoy-tag' }, 'decoy'),
+                    ' ',
+                    labelToColoredNodes(adef.topic),
+                    ': ',
+                    el('em', {}, labelToColoredNodes(aopt.label)),
+                ));
+            }
+            list.appendChild(li);
         });
 
         $('#end-share-url').value = shareUrl;
