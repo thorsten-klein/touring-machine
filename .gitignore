@@ -1,0 +1,8 @@
+bak/
+ext/
+
+node_modules/
+.nyc_output/
+.nyc_inst/
+coverage/
+test-results/

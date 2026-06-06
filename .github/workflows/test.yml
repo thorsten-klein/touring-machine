@@ -1,0 +1,108 @@
+name: Tests
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+
+# Cancel any in-progress run for the same branch/PR when a new commit is pushed.
+# Different branches and PRs still run independently.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium]
+    name: Tests (${{ matrix.browser }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers and system deps
+        run: npx playwright install --with-deps chrome
+
+      - name: Run tests
+        run: ./test.sh --project=${{ matrix.browser }}
+
+      - name: Upload coverage data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-shard-${{ matrix.browser }}
+          path: .nyc_output/
+          # Chromium MUST produce coverage data; firefox/webkit don't (page.coverage is Chromium-only)
+          if-no-files-found: ${{ matrix.browser == 'chromium' && 'error' || 'ignore' }}
+          retention-days: 1
+          include-hidden-files: true        # .nyc_output is a dot-dir; v4 excludes it by default
+
+  coverage:
+    name: Merge coverage and upload to Codecov
+    runs-on: ubuntu-latest
+    needs: test
+    if: ${{ !cancelled() }}    # also run if some shards failed — coverage from passing tests is still useful
+    permissions:
+      contents: read
+      actions: write    # required to delete artifacts at the end
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download all shard coverage
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-shard-*
+          path: .nyc_output
+          merge-multiple: true    # flatten all artifacts into one .nyc_output directory
+
+      - name: Show merged coverage summary
+        run: npx nyc report --reporter=text-summary
+
+      - name: Generate lcov report
+        run: npx nyc report --reporter=lcov --report-dir=coverage
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage/lcov.info
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Delete per-shard coverage artifacts
+        if: always()    # run even if Codecov upload failed — artifacts are still no longer needed
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: { artifacts } } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+            });
+            for (const artifact of artifacts) {
+              if (artifact.name.startsWith('coverage-shard-')) {
+                core.info(`Deleting artifact ${artifact.name} (id ${artifact.id})`);
+                await github.rest.actions.deleteArtifact({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  artifact_id: artifact.id,
+                });
+              }
+            }

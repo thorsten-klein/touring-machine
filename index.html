@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Turing Machine</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='6' y='10' width='52' height='44' rx='5' fill='%23233244' stroke='%2300d4aa' stroke-width='2'/><circle cx='20' cy='32' r='6' fill='%231e88e5'/><circle cx='32' cy='32' r='6' fill='%23ffd54f'/><circle cx='44' cy='32' r='6' fill='%23ab47bc'/></svg>">
+<link rel="stylesheet" href="./css/index.css">
+</head>
+<body>
+<!-- Reusable SVG icon sprite (referenced via <use href="#icon-…"/>) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <defs>
+        <symbol id="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+        </symbol>
+        <symbol id="icon-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="6" cy="12" r="3"/>
+            <circle cx="18" cy="6" r="3"/>
+            <circle cx="18" cy="18" r="3"/>
+            <line x1="8.6" y1="10.6" x2="15.4" y2="7.4"/>
+            <line x1="8.6" y1="13.4" x2="15.4" y2="16.6"/>
+        </symbol>
+    </defs>
+</svg>
+
+<div id="app">
+    <header id="topbar">
+        <div id="topbar-left">
+            <button id="btn-back" class="topbar-btn" title="Back to menu" hidden>
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <svg class="topbar-logo" viewBox="0 0 64 64" aria-hidden="true">
+                <rect x="6" y="10" width="52" height="44" rx="5" fill="#233244" stroke="#00d4aa" stroke-width="2"/>
+                <circle cx="20" cy="32" r="6" fill="#1e88e5"/>
+                <circle cx="32" cy="32" r="6" fill="#ffd54f"/>
+                <circle cx="44" cy="32" r="6" fill="#ab47bc"/>
+            </svg>
+            <span id="topbar-title">Turing Machine</span>
+        </div>
+        <div id="topbar-actions">
+            <button id="btn-share" class="topbar-btn" title="Share this puzzle" hidden>
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><line x1="8.6" y1="10.6" x2="15.4" y2="7.4"/><line x1="8.6" y1="13.4" x2="15.4" y2="16.6"/></svg>
+            </button>
+            <button id="btn-info" class="topbar-btn" title="Rules">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="11"/><circle cx="12" cy="8" r="0.5" fill="currentColor"/></svg>
+            </button>
+        </div>
+    </header>
+
+    <div id="screens">
+        <!-- Main Menu -->
+        <div id="screen-main" class="screen">
+            <div class="screen-content">
+                <div class="logo-wrap">
+                    <svg class="title-logo" viewBox="0 0 120 80" aria-hidden="true">
+                        <rect x="6" y="10" width="108" height="60" rx="8" fill="#1b2535" stroke="#00d4aa" stroke-width="2"/>
+                        <circle cx="32" cy="40" r="11" fill="#1e88e5"/>
+                        <circle cx="60" cy="40" r="11" fill="#ffd54f"/>
+                        <circle cx="88" cy="40" r="11" fill="#ab47bc"/>
+                        <line x1="6" y1="22" x2="114" y2="22" stroke="#00d4aa" stroke-width="0.5" opacity="0.4"/>
+                        <line x1="6" y1="58" x2="114" y2="58" stroke="#00d4aa" stroke-width="0.5" opacity="0.4"/>
+                    </svg>
+                </div>
+                <h1 class="title">Turing Machine</h1>
+                <p class="byline">A code-breaking deduction game</p>
+
+                <div class="menu-buttons">
+                    <button id="btn-resume-game" hidden>Resume Game</button>
+                    <button id="btn-start-game">Start new game</button>
+                    <button id="btn-play-friends">Play a shared game</button>
+                </div>
+
+                <div id="intro-rules">
+                    <p>Crack a code by questioning a set of verifiers and deducing.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Level Select -->
+        <div id="screen-level" class="screen hidden">
+            <div class="screen-content">
+                <h2 class="subtitle">Select Difficulty</h2>
+                <p class="level-subtitle">More verifiers = a harder puzzle.</p>
+                <div id="level-options" class="menu-buttons vertical"></div>
+            </div>
+            <div class="menu-buttons">
+                <button id="btn-back-to-main" class="btn-back">Back</button>
+            </div>
+        </div>
+
+        <!-- Game Screen -->
+        <div id="screen-game" class="screen hidden">
+            <div id="game-header">
+                <div id="game-info">
+                    <span id="info-level"></span>
+                    <span class="sep">·</span>
+                    <span id="info-round">Round 1</span>
+                    <span class="sep">·</span>
+                    <span id="info-questions">0 questions</span>
+                </div>
+            </div>
+
+            <main id="game-main">
+                <section id="verifiers-section">
+                    <h3 class="section-title">Verifiers</h3>
+                    <div id="verifier-row"></div>
+                </section>
+
+                <section id="notes-section">
+                    <h3 class="section-title">Note sheet</h3>
+                    <div id="notes-table-wrap"><table id="notes-table"></table></div>
+                </section>
+
+                <section id="digitmap-section">
+                    <h3 class="section-title">Digit map</h3>
+                    <p class="hint digitmap-hint">Click a cell to cross out digits you've ruled out. Just a memory aid — doesn't affect the puzzle.</p>
+                    <div id="digitmap-wrap"><table id="digitmap-table"></table></div>
+                </section>
+            </main>
+
+            <footer id="game-footer">
+                <section id="proposal-section">
+                    <div id="proposal-dials"></div>
+                    <p class="hint" id="round-hint">Up to 3 verifier questions per round.</p>
+                </section>
+
+                <div id="game-controls">
+                    <button id="btn-end-round" class="ctrl-btn">End round →</button>
+                    <button id="btn-submit-code" class="ctrl-btn primary">Submit code</button>
+                    <button id="btn-give-up" class="ctrl-btn danger">Give up</button>
+                </div>
+            </footer>
+        </div>
+
+        <!-- End screen -->
+        <div id="screen-end" class="screen hidden v-center">
+            <div class="end-content-container">
+                <h2 id="end-title" class="subtitle"></h2>
+                <p id="end-stats"></p>
+                <div id="end-solution-block">
+                    <p id="end-solution-label">The code was:</p>
+                    <div id="end-solution-row"></div>
+                </div>
+                <div id="end-criteria-block">
+                    <h3 class="section-title">The verifiers' criteria</h3>
+                    <ul id="end-criteria-list"></ul>
+                </div>
+                <div class="menu-buttons">
+                    <button id="btn-replay-same">Replay same puzzle</button>
+                    <button id="btn-new-puzzle">New puzzle</button>
+                    <button id="btn-end-menu" class="btn-back">Back to menu</button>
+                </div>
+                <div id="end-share-section">
+                    <h4>Share this puzzle</h4>
+                    <div class="game-sheet-field">
+                        <label for="end-share-url">Shareable URL</label>
+                        <div class="field-with-copy">
+                            <input id="end-share-url" type="text" class="share-url-textarea" readonly>
+                            <button id="btn-end-copy-url" class="icon-btn" type="button" aria-label="Copy URL" title="Copy URL">
+                                <svg class="icon"><use href="#icon-copy"/></svg>
+                            </button>
+                            <button id="btn-end-share-url" class="icon-btn share-action" type="button" aria-label="Share URL" title="Share URL" hidden>
+                                <svg class="icon"><use href="#icon-share"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="game-sheet-field">
+                        <label for="end-share-game-id">Game ID</label>
+                        <div class="field-with-copy">
+                            <input id="end-share-game-id" type="text" class="share-url-textarea" readonly>
+                            <button id="btn-end-copy-id" class="icon-btn" type="button" aria-label="Copy game ID" title="Copy game ID">
+                                <svg class="icon"><use href="#icon-copy"/></svg>
+                            </button>
+                            <button id="btn-end-share-id" class="icon-btn share-action" type="button" aria-label="Share game ID" title="Share game ID" hidden>
+                                <svg class="icon"><use href="#icon-share"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div><!-- /#screens -->
+</div>
+
+<!-- Submit-code modal -->
+<div id="submit-modal" class="modal hidden">
+    <div class="modal-content">
+        <h3>Submit your final code</h3>
+        <p class="hint">Only the code that satisfies <em>all</em> verifier criteria will win. You can keep playing if you're not ready yet.</p>
+        <div id="submit-dials"></div>
+        <div class="menu-buttons">
+            <button id="btn-confirm-submit" class="primary">Submit</button>
+            <button id="btn-cancel-submit" class="btn-back">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Share board modal (opened from topbar) -->
+<div id="share-modal" class="modal hidden">
+    <div class="modal-content">
+        <h3>Share this puzzle</h3>
+        <p>Anyone who opens this link will play the exact same puzzle as you.</p>
+        <div class="game-sheet-field">
+            <label for="share-url">Shareable URL</label>
+            <div class="field-with-copy">
+                <input id="share-url" type="text" class="share-url-textarea" readonly>
+                <button id="btn-share-copy-url" class="icon-btn" type="button" aria-label="Copy URL" title="Copy URL">
+                    <svg class="icon"><use href="#icon-copy"/></svg>
+                </button>
+                <button id="btn-share-share-url" class="icon-btn share-action" type="button" aria-label="Share URL" title="Share URL" hidden>
+                    <svg class="icon"><use href="#icon-share"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="game-sheet-field">
+            <label for="share-game-id">Game ID</label>
+            <div class="field-with-copy">
+                <input id="share-game-id" type="text" class="share-url-textarea" readonly>
+                <button id="btn-share-copy-id" class="icon-btn" type="button" aria-label="Copy game ID" title="Copy game ID">
+                    <svg class="icon"><use href="#icon-copy"/></svg>
+                </button>
+                <button id="btn-share-share-id" class="icon-btn share-action" type="button" aria-label="Share game ID" title="Share game ID" hidden>
+                    <svg class="icon"><use href="#icon-share"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="menu-buttons">
+            <button id="btn-share-close" class="btn-back">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Play shared modal -->
+<div id="play-shared-modal" class="modal hidden">
+    <div class="modal-content">
+        <h3>Play a shared puzzle</h3>
+        <p>Paste a game ID or a shared URL.</p>
+        <div class="game-sheet-field">
+            <label for="play-shared-input">Game ID or URL</label>
+            <div class="field-with-copy">
+                <input id="play-shared-input" type="text" class="share-url-textarea" placeholder="Paste here…">
+            </div>
+        </div>
+        <p id="play-shared-error" class="error-msg" hidden></p>
+        <div class="menu-buttons">
+            <button id="btn-play-shared-start" class="primary">Start</button>
+            <button id="btn-play-shared-cancel" class="btn-back">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Rules modal -->
+<div id="rules-modal" class="modal hidden">
+    <div class="modal-content rules-content">
+        <h3>How to play</h3>
+        <div id="rules-body">
+            <p>The <strong>code</strong> is three digits — one each of <span class="dot blue"></span>blue, <span class="dot yellow"></span>yellow, and <span class="dot purple"></span>purple — each between <strong>1 and 5</strong>.</p>
+            <p>Each <strong>Verifier</strong> (A, B, C…) checks one secret <strong>criterion</strong>. Each verifier card shows the topic and a list of possible criteria — exactly one is the real one. Your job: deduce which.</p>
+            <p><strong>Each round</strong>:</p>
+            <ol>
+                <li>Set your 3-digit number using the dials.</li>
+                <li>Ask up to <strong>3 verifiers</strong> — each answers <span class="ok">✓</span> if your number satisfies their criterion, <span class="fail">✗</span> otherwise.</li>
+                <li>Use the answers to cross out impossible options on the verifier cards.</li>
+                <li>End the round and start a new number.</li>
+            </ol>
+            <p>When you think you've identified <em>all</em> criteria, work out the unique code that satisfies them all, and press <strong>Submit code</strong>. Fewer total questions = better score.</p>
+            <p class="hint">There is always exactly one code that satisfies every criterion, and no verifier is superfluous — you need all of them.</p>
+        </div>
+        <div class="menu-buttons">
+            <button id="btn-close-rules" class="btn-back">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Give-up confirmation modal -->
+<div id="giveup-modal" class="modal hidden">
+    <div class="modal-content">
+        <h3>Give up and reveal the code?</h3>
+        <p>This ends the current game. You'll see the correct code and the criteria, but it counts as a loss.</p>
+        <div class="menu-buttons">
+            <button id="btn-confirm-giveup" class="danger">Give up</button>
+            <button id="btn-cancel-giveup" class="btn-back">Keep playing</button>
+        </div>
+    </div>
+</div>
+
+<!-- Custom level modal -->
+<div id="custom-level-modal" class="modal hidden">
+    <div class="modal-content">
+        <h3>Custom level</h3>
+        <p class="hint">Pick a digit range and how many verifiers to fight.</p>
+        <div class="custom-stepper-grid">
+            <div class="stepper-row">
+                <div class="stepper-label">Digit min</div>
+                <div class="stepper-controls">
+                    <button class="dial-step" data-cfg="digitMin" data-delta="-1">−</button>
+                    <span class="stepper-val" id="cfg-digit-min">1</span>
+                    <button class="dial-step" data-cfg="digitMin" data-delta="1">+</button>
+                </div>
+            </div>
+            <div class="stepper-row">
+                <div class="stepper-label">Digit max</div>
+                <div class="stepper-controls">
+                    <button class="dial-step" data-cfg="digitMax" data-delta="-1">−</button>
+                    <span class="stepper-val" id="cfg-digit-max">5</span>
+                    <button class="dial-step" data-cfg="digitMax" data-delta="1">+</button>
+                </div>
+            </div>
+            <div class="stepper-row">
+                <div class="stepper-label">Verifiers</div>
+                <div class="stepper-controls">
+                    <button class="dial-step" data-cfg="verifiers" data-delta="-1">−</button>
+                    <span class="stepper-val" id="cfg-verifiers">5</span>
+                    <button class="dial-step" data-cfg="verifiers" data-delta="1">+</button>
+                </div>
+            </div>
+            <div class="stepper-row">
+                <div class="stepper-label">Questions / round</div>
+                <div class="stepper-controls">
+                    <button class="dial-step" data-cfg="questionsPerRound" data-delta="-1">−</button>
+                    <span class="stepper-val" id="cfg-qpr">3</span>
+                    <button class="dial-step" data-cfg="questionsPerRound" data-delta="1">+</button>
+                </div>
+            </div>
+        </div>
+        <div id="custom-stats" class="custom-stats" hidden>
+            <div class="stat-row"><span class="stat-label">Search space</span><span class="stat-val" id="stat-codespace">—</span></div>
+            <div class="stat-row"><span class="stat-label">Laws available</span><span class="stat-val" id="stat-cards">—</span></div>
+            <div class="stat-row"><span class="stat-label">Expected criterion combinations</span><span class="stat-val" id="stat-combos">—</span></div>
+            <div class="stat-row"><span class="stat-label">Expected bits to deduce</span><span class="stat-val" id="stat-bits">—</span></div>
+            <div class="stat-row highlight"><span class="stat-label">Estimated rounds to solve</span><span class="stat-val" id="stat-rounds">—</span></div>
+        </div>
+        <div id="custom-status-row" class="custom-status-row">
+            <span id="custom-spinner" class="spinner" hidden></span>
+            <p id="custom-status" class="custom-status">Checking configuration…</p>
+        </div>
+        <div class="menu-buttons">
+            <button id="btn-start-custom" class="primary" disabled>Start</button>
+            <button id="btn-cancel-custom" class="btn-back">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast" hidden></div>
+
+<!-- Scripts: order matters; classes/constants are referenced as globals -->
+<script src="./src/constants.js"></script>
+<script src="./src/criteria.js"></script>
+<script src="./src/generator.js"></script>
+<script src="./src/state.js"></script>
+<script src="./src/ui.js"></script>
+<script src="./src/game.js"></script>
+<script src="./src/main.js"></script>
+</body>
+</html>

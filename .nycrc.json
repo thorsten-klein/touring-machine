@@ -1,0 +1,6 @@
+{
+  "all": false,
+  "include": ["src/**/*.js"],
+  "exclude": ["tests/**", "node_modules/**", "playwright.config.js"],
+  "reporter": ["text"]
+}
