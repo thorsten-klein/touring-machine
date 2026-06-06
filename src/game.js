@@ -57,38 +57,112 @@ class Game {
         this.openGameScreen();
     }
 
-    // Round-local markers (NOT cumulative across rounds). When the player
-    // asks a verifier, the ● option (the one whose predicate matches the
-    // current proposal as PASS) gets a ✓ if the verifier answered PASS or
-    // an ✗ if FAIL. Other options stay empty for this round. Because Ask is
-    // only allowed when exactly one option is ●, the "according line" is
-    // unambiguous.
+    // Markers persist across rounds — once a query has hit an option (i.e.
+    // the option was the ● at ask time) the verdict stays visible forever.
+    // An option is crossed (✗) the first time any query rules it out; an
+    // option is confirmed (✓) when it's the verifier's criterion — either
+    // directly confirmed by a ✓ query OR the sole survivor after all others
+    // have been ruled out.
     //
-    // Returns { crossed: Set<optIdx>, confirmed: optIdx | null } per verifier
-    // so the existing renderer can keep its marker classes — but `crossed`
-    // and `confirmed` here mean "this round's outcome", not lifetime state.
+    // Auto-deduction: each card has exactly one true criterion, so:
+    //   • if an option was confirmed ✓, every other option on the card must
+    //     be ✗ (the criterion is uniquely that option);
+    //   • if N-1 options are ✗, the lone remaining option must be ✓.
+    // We propagate both implications to fixed point so a single ✓ or N-1 ✗s
+    // marks the whole card.
     computeDeductions() {
-        // Once End round is clicked (pendingNewRound = true), the round is
-        // considered finished — the player wants a clean slate before the
-        // next round starts, so we show no markers at all until the next Ask.
-        if (this.state.pendingNewRound) {
-            return this.state.puzzle.cards.map(() => ({ crossed: new Set(), confirmed: null }));
-        }
-        const round = this.state.round;
         return this.state.puzzle.cards.map((card, vi) => {
             const def = CARDS_BY_ID[card.id];
-            const qs = this.state.queries.filter(q => q.round === round && q.verifierIdx === vi);
-            const crossed = new Set();
-            let confirmed = null;
+            const qs = this.state.queries.filter(q => q.verifierIdx === vi);
+            const crossed = new Set();   // option was ● in some query → ✗
+            const passed  = new Set();   // option was ● in some query → ✓ (directly)
             for (const q of qs) {
                 def.options.forEach((opt, oi) => {
                     if (!opt.test(q.proposal)) return; // not the ● option for this query
-                    if (q.result) confirmed = oi;
+                    if (q.result) passed.add(oi);
                     else          crossed.add(oi);
                 });
             }
-            return { crossed, confirmed };
+            // Propagate the two implications until nothing more changes.
+            const n = def.options.length;
+            let changed = true;
+            while (changed) {
+                changed = false;
+                // Any ✓ option ⇒ every other option on this card is ✗.
+                for (const truth of passed) {
+                    for (let oi = 0; oi < n; oi++) {
+                        if (oi !== truth && !crossed.has(oi)) {
+                            crossed.add(oi);
+                            changed = true;
+                        }
+                    }
+                }
+                // Exactly one unmarked option left ⇒ it must be the criterion.
+                if (crossed.size === n - 1) {
+                    for (let oi = 0; oi < n; oi++) {
+                        if (!crossed.has(oi) && !passed.has(oi)) {
+                            passed.add(oi);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            const possibleOpts = def.options
+                .map((_, oi) => oi)
+                .filter(oi => !crossed.has(oi));
+            const confirmed = possibleOpts.length === 1 ? possibleOpts[0] : null;
+            return { crossed, passed, confirmed };
         });
+    }
+
+    // Build the reasoning trace for one (verifier, option) marker. Returns
+    // everything the deduction-trace modal needs: which past queries directly
+    // pinned the option, and — if the marker came from elimination — the
+    // queries that knocked out every other option on the card.
+    deduceFor(verifierIdx, optionIdx) {
+        const card = this.state.puzzle.cards[verifierIdx];
+        const def  = CARDS_BY_ID[card.id];
+        const qs   = this.state.queries.filter(q => q.verifierIdx === verifierIdx);
+        // Per-option scan: collect every query where the option was the ●,
+        // split by result.
+        const perOpt = def.options.map((opt, oi) => {
+            const matching = qs.filter(q => opt.test(q.proposal));
+            return {
+                idx:        oi,
+                label:      opt.label,
+                passQueries: matching.filter(q => q.result),
+                failQueries: matching.filter(q => !q.result),
+                ruledOut:   matching.some(q => !q.result),
+            };
+        });
+        const target = perOpt[optionIdx];
+        // Any directly-confirmed (✓) option on this card uniquely fixes the
+        // criterion, so every other option is implied-crossed.
+        const directlyConfirmed = perOpt.find(p =>
+            p.passQueries.length && !p.ruledOut);
+        const impliedCross = directlyConfirmed && directlyConfirmed.idx !== optionIdx;
+        const possibleOpts = perOpt.filter(p => !p.ruledOut && !(impliedCross && p.idx !== directlyConfirmed.idx));
+        const confirmed = possibleOpts.length === 1 && possibleOpts[0].idx === optionIdx;
+
+        let status;
+        if (target.ruledOut)                              status = 'crossed';
+        else if (impliedCross)                            status = 'crossed-implied';
+        else if (confirmed && target.passQueries.length)  status = 'confirmed-direct';
+        else if (confirmed)                               status = 'confirmed-elim';
+        else if (target.passQueries.length)               status = 'passed';
+        else                                              status = 'unknown';
+
+        return {
+            verifierIdx,
+            optionIdx,
+            verifierLetter: VERIFIER_LETTERS[verifierIdx],
+            topic: def.topic,
+            label: target.label,
+            status,
+            target,
+            perOpt,
+            directlyConfirmed,
+        };
     }
 
     // Count "active" options for a verifier — those whose live preview is ●
@@ -146,23 +220,33 @@ class Game {
         const hint = document.getElementById('round-hint');
         if (hint) {
             if (s.pendingNewRound) {
-                hint.textContent = `Round ${s.round} completed. Adjust your number, then click Ask to begin next round ${s.round + 1}, or submit code.`;
+                hint.textContent = `Round ${s.round} completed. Submit your code, or adjust your number and click Ask to continue with round ${s.round + 1}.`;
             } else if (s.queriesInRound(s.round) > 0) {
                 const left = GAME_CONFIG.questionsPerRound - s.queriesInRound(s.round);
                 hint.textContent = left > 0
-                    ? `Round ${s.round} — ${left} question${left===1?'':'s'} left this round. Dials are locked until you end the round.`
+                    ? `Round ${s.round} — ${left} question${left===1?'':'s'} left this round. Note: You cannot change the number during a round.`
                     : `Round ${s.round} — no more questions this round. Click "End round" when ready.`;
             } else {
-                hint.textContent = `Set your number, then click any verifier's Ask to begin round ${s.round}.`;
+                hint.textContent = `Set any number, then click any verifier's 'Ask' to start round ${s.round}.`;
             }
         }
-        this.ui.renderDigitMap(s.disabledDigits, (ci, d) => {
-            s.toggleDisabledDigit(ci, d);
-            saveActive(s);
-            // Cheap targeted update: just flip the affected cell's class.
-            const cell = document.querySelector(`#digitmap-table .dm-cell[data-ci="${ci}"][data-d="${d}"]`);
-            if (cell) cell.classList.toggle('off', s.disabledDigits[ci].has(d));
-        });
+        this.ui.renderDigitMap(
+            s.disabledDigits, s.candidateDigits,
+            // click → toggle crossed-out state
+            (ci, d) => {
+                s.toggleDisabledDigit(ci, d);
+                saveActive(s);
+                const cell = document.querySelector(`#digitmap-table .dm-cell[data-ci="${ci}"][data-d="${d}"]`);
+                if (cell) cell.classList.toggle('off', s.disabledDigits[ci].has(d));
+            },
+            // right-click / long-press → toggle candidate circle
+            (ci, d) => {
+                s.toggleCandidateDigit(ci, d);
+                saveActive(s);
+                const cell = document.querySelector(`#digitmap-table .dm-cell[data-ci="${ci}"][data-d="${d}"]`);
+                if (cell) cell.classList.toggle('candidate', s.candidateDigits[ci].has(d));
+            },
+        );
     }
 
     onProposalChange(newProp) {
@@ -350,8 +434,10 @@ class Game {
 
             let attempted = 0;
             const tryChunk = () => {
+                /* istanbul ignore if -- cancellation is a defensive race-guard; the cancel + reopen flow already covers it elsewhere */
                 if (myToken !== checkToken) { spinner.hidden = true; return; }
                 let puzzle = null;
+                /* istanbul ignore next -- the catch handles programmer-error throws that no user-reachable config produces */
                 try {
                     puzzle = generatePuzzle('CUSTOM', undefined, {
                         digitMin: cfg.digitMin,
@@ -397,10 +483,10 @@ class Game {
             // picks one card per family; treating options-per-card as i.i.d.
             // is a fine first-order approximation of the typical puzzle.
             const totalOpts = CARDS.reduce((s, c) => s + c.options.length, 0);
-            const avgOpts   = CARDS.length ? totalOpts / CARDS.length : 0;
+            const avgOpts   = totalOpts / CARDS.length;
             const v         = cfg.verifiers;
             const combos    = Math.pow(avgOpts, v);
-            const bits      = v * Math.log2(avgOpts || 1);
+            const bits      = v * Math.log2(avgOpts);
             const minQueries = Math.ceil(bits);
             /* istanbul ignore next -- cfg.questionsPerRound is always present in the modal flow */
             const qpr       = cfg.questionsPerRound || 3;
@@ -413,17 +499,13 @@ class Game {
             document.getElementById('stat-cards').textContent =
                 `${CARDS.length} distinct rules (avg ${avgOpts.toFixed(1)} options/card)`;
             document.getElementById('stat-combos').textContent =
-                CARDS.length
-                    ? `~${Math.round(combos).toLocaleString()} (≈ ${avgOpts.toFixed(1)}^${v})`
-                    : '—';
+                `~${Math.round(combos).toLocaleString()} (≈ ${avgOpts.toFixed(1)}^${v})`;
             document.getElementById('stat-bits').textContent =
-                CARDS.length ? `${bits.toFixed(1)} bits → ≥${minQueries} questions` : '—';
+                `${bits.toFixed(1)} bits → ≥${minQueries} questions`;
             document.getElementById('stat-rounds').textContent =
-                CARDS.length
-                    ? (minRounds === expectedRounds
-                        ? `~${minRounds} round${minRounds===1?'':'s'}`
-                        : `${minRounds}–${expectedRounds} rounds`)
-                    : '—';
+                minRounds === expectedRounds
+                    ? `~${minRounds} round${minRounds===1?'':'s'}`
+                    : `${minRounds}–${expectedRounds} rounds`;
             statsBox.hidden = false;
         };
 
@@ -537,6 +619,22 @@ class Game {
         $('#btn-end-round').onclick  = () => this.onEndRound();
         $('#btn-submit-code').onclick = () => this.onSubmitCode();
         $('#btn-give-up').onclick = () => this.onGiveUp();
+
+        // Delegated click: tapping a verifier-card .marker opens the trace
+        // modal explaining how that ✓/✗ came to be. Empty markers are
+        // intentionally inert (nothing to explain yet).
+        $('#verifier-row').addEventListener('click', (ev) => {
+            const marker = ev.target.closest('.marker');
+            if (!marker) return;
+            const vopt = marker.closest('.vopt');
+            const card = marker.closest('.verifier-card');
+            if (!vopt || !card) return;
+            if (!marker.textContent.trim()) return;
+            const vi = parseInt(card.getAttribute('data-vidx'));
+            const oi = parseInt(vopt.getAttribute('data-oi'));
+            this.ui.renderDeductionModal(this.deduceFor(vi, oi));
+        });
+        $('#btn-close-deduction').onclick = () => this.ui.closeModal('deduction-modal');
     }
 }
 

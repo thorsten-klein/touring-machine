@@ -140,30 +140,38 @@ class UI {
 
             const optsList = el('ul', { class: 'voptions' });
             def.options.forEach((opt, oi) => {
-                const ded = deductions[i] || { crossed: new Set(), confirmed: null };
+                const ded = deductions[i] || { crossed: new Set(), passed: new Set(), confirmed: null };
                 const isCross = ded.crossed.has(oi);
+                const isPassed = ded.passed && ded.passed.has(oi);
                 const isConfirmed = ded.confirmed === oi;
                 const title = isConfirmed ? 'This must be the criterion'
-                            : isCross    ? 'Ruled out by your previous queries'
-                            :              'Still possible';
-                // Live preview against the current proposal — only shown for
-                // options not yet eliminated/confirmed. Updated in place by
-                // updateVerifierPreviews() whenever the proposal changes.
-                // Only show the ● when the current number activates the
-                // option. Non-active options just show nothing — less visual
-                // noise and matches the user's "active = ●" mental model.
-                const wouldPass = proposal && !isCross && !isConfirmed
-                    ? !!opt.test(proposal) : false;
+                            : isCross    ? 'Past query: FAIL on this rule'
+                            :               'Still possible';
+                // Right-side indicator: just the live ● for whatever option
+                // the current number activates. Past verdicts show on the
+                // LEFT marker as ✓/✗.
+                const wouldPass = proposal && !isConfirmed && opt.test(proposal);
                 const preview = el('span', {
                     class: 'preview' + (wouldPass ? ' pass' : ' hidden-preview'),
                     title: wouldPass ? 'Current number would PASS this rule' : '',
-                }, wouldPass ? '◀' : '');
+                    html: wouldPass ? PREVIEW_ARROW_SVG : '',
+                });
 
+                // Left marker reflects accumulated query knowledge:
+                //   ✓ confirmed / passed,   ✗ ruled out by a past query.
+                // We deliberately don't apply ANY "ruled out" styling to the
+                // row itself (no strike-through, no dimming) — only the
+                // marker itself signals the verdict.
+                const markerChar = (isConfirmed || isPassed) ? '✓'
+                                 : isCross                   ? '✗'
+                                 :                             '';
                 const li = el('li',
-                    { class: 'vopt' + (isCross ? ' crossed' : '') + (isConfirmed ? ' confirmed' : ''),
+                    { class: 'vopt'
+                        + (isConfirmed ? ' confirmed' : '')
+                        + (isCross    ? ' ruledout' : ''),
                       'data-vidx': i, 'data-oi': oi,
                       title },
-                    el('span', { class: 'marker' }, isCross ? '✗' : isConfirmed ? '✓' : ''),
+                    el('span', { class: 'marker' }, markerChar),
                     el('span', { class: 'vopt-label' }, labelToColoredNodes(opt.label)),
                     preview,
                 );
@@ -213,6 +221,22 @@ class UI {
 
             row.appendChild(card_el);
         });
+        // Equalize widths so every card matches the widest one (driven by
+        // unwrapped vqlog rows). Runs after layout so scrollWidth is accurate.
+        this._equalizeVerifierCardWidths();
+    }
+
+    // Measure each card's intrinsic width (with `width: max-content` so the
+    // card sizes to its widest unwrappable child — typically a vqlog row or
+    // the vtopic), then apply the max as a fixed width to all cards. The
+    // wrapper is flex-wrap so cards wrap to a new row when total width
+    // exceeds the container, but every visible card has identical width.
+    _equalizeVerifierCardWidths() {
+        const cards = Array.from(document.querySelectorAll('#verifier-row .verifier-card'));
+        if (!cards.length) return;
+        cards.forEach(c => { c.style.width = 'max-content'; });
+        const widest = cards.reduce((m, c) => Math.max(m, c.getBoundingClientRect().width), 0);
+        cards.forEach(c => { c.style.width = widest + 'px'; });
     }
 
     // Recompute the live preview marker on every verifier option without
@@ -220,20 +244,27 @@ class UI {
     updateVerifierPreviews(puzzle, deductions, proposal) {
         puzzle.cards.forEach((card, i) => {
             const def = CARDS_BY_ID[card.id];
-            const ded = deductions[i] || { crossed: new Set(), confirmed: null };
+            const ded = deductions[i] || { crossed: new Set(), passed: new Set(), confirmed: null };
             def.options.forEach((opt, oi) => {
                 const node = document.querySelector(
                     `.verifier-card[data-vidx="${i}"] .vopt[data-oi="${oi}"] .preview`);
                 if (!node) return;
-                const live = !ded.crossed.has(oi) && ded.confirmed !== oi;
+                // Right side only ever shows the live ● for currently-active
+                // options. Past verdicts (✓) live in the LEFT marker, which
+                // is set in renderVerifiers and is not touched on dial ticks.
+                // We don't rule anything out on the verifier card, so even
+                // options previously seen as FAIL still get the live ● when
+                // the current number activates them.
+                const live = ded.confirmed !== oi
+                          && !(ded.passed && ded.passed.has(oi));
                 const ok = live && !!opt.test(proposal);
                 if (ok) {
                     node.className = 'preview pass';
-                    node.textContent = '◀';
+                    node.innerHTML = PREVIEW_ARROW_SVG;
                     node.title = 'Current number would PASS this rule';
                 } else {
                     node.className = 'preview hidden-preview';
-                    node.textContent = '';
+                    node.innerHTML = '';
                     node.title = '';
                 }
             });
@@ -300,8 +331,11 @@ class UI {
 
     // ----- digit map -----
     // Rows = each value in the configured digit range, columns = each color
-    // slot. Cells are toggle buttons; the click callback gets (colorIdx, digit).
-    renderDigitMap(disabledDigits, onToggle) {
+    // slot. Two manual overlays per cell, independent:
+    //   • click               → toggle "off" (✗ crossed)
+    //   • right-click / long-press → toggle "candidate" (blue circle)
+    // A cell can carry both — useful when narrowing then re-questioning.
+    renderDigitMap(disabledDigits, candidateDigits, onToggleOff, onToggleCandidate) {
         const t = $('#digitmap-table');
         t.innerHTML = '';
         const head = el('thead', {}, el('tr', {},
@@ -317,18 +351,162 @@ class UI {
         for (let v = GAME_CONFIG.digitMin; v <= GAME_CONFIG.digitMax; v++) {
             const tr = el('tr', {},
                 ...GAME_CONFIG.colors.map((c, ci) => {
-                    const off = disabledDigits[ci].has(v);
-                    return el('td', {
-                        class: 'dm-cell' + (off ? ' off' : ''),
+                    const off  = disabledDigits[ci].has(v);
+                    const cand = candidateDigits[ci].has(v);
+                    const cls  = 'dm-cell'
+                        + (off  ? ' off'  : '')
+                        + (cand ? ' candidate' : '');
+                    const cell = el('td', {
+                        class: cls,
                         'data-ci': ci, 'data-d': v,
-                        title: off ? 'Click to bring back' : 'Click to cross out',
-                        onclick: () => onToggle(ci, v),
+                        title: 'Click: cross out · Right-click / long-press: mark candidate',
                     }, String(v));
+                    cell.addEventListener('click', () => onToggleOff(ci, v));
+                    cell.addEventListener('contextmenu', (e) => {
+                        e.preventDefault();
+                        onToggleCandidate(ci, v);
+                    });
+                    // Long-press for touch devices: ~500 ms hold fires the
+                    // candidate toggle and suppresses the trailing click.
+                    let pressTimer = null;
+                    let longFired  = false;
+                    const cancel = () => { clearTimeout(pressTimer); pressTimer = null; };
+                    cell.addEventListener('touchstart', () => {
+                        longFired = false;
+                        cancel();
+                        pressTimer = setTimeout(() => {
+                            longFired = true;
+                            try { if (navigator.vibrate) navigator.vibrate(30); } catch (_) {}
+                            // Some browsers select the cell text the moment
+                            // the long-press fires; clear it so the cell
+                            // doesn't end up looking selected.
+                            try { window.getSelection && window.getSelection().removeAllRanges(); }
+                            catch (_) { /* ignore */ }
+                            onToggleCandidate(ci, v);
+                        }, 500);
+                    }, { passive: true });
+                    cell.addEventListener('touchmove', cancel, { passive: true });
+                    cell.addEventListener('touchend', (e) => {
+                        if (pressTimer) cancel();
+                        if (longFired) { e.preventDefault(); longFired = false; }
+                    });
+                    return cell;
                 })
             );
             body.appendChild(tr);
         }
         t.appendChild(body);
+    }
+
+    // ----- deduction trace modal -----
+    // `trace` comes from Game#deduceFor. Lays out a short status line and a
+    // list of "evidence" rows — past queries that produced the verdict, or,
+    // for confirm-by-elimination, the queries that knocked out every other
+    // option.
+    renderDeductionModal(trace) {
+        $('#ded-title').textContent = 'How was this deduced?';
+        const sub = $('#ded-subtitle');
+        sub.innerHTML = '';
+        sub.appendChild(el('span', { class: 'verifier-tag' }, `Verifier ${trace.verifierLetter}`));
+        sub.appendChild(document.createTextNode(' · '));
+        sub.appendChild(labelToColoredNodes(trace.label));
+
+        const status = $('#ded-status');
+        status.innerHTML = '';
+        const body = $('#ded-body');
+        body.innerHTML = '';
+
+        const evidenceRow = (q, ok) => el('li', { class: ok ? 'ev-ok' : 'ev-no' },
+            el('span', { class: 'ev-round' }, `Round ${q.round}`),
+            el('span', { class: 'ev-prop' }, formatProposalNode(q.proposal)),
+            el('span', { class: 'ev-arrow' }, '→'),
+            el('span', { class: ok ? 'ev-result ok' : 'ev-result fail' }, ok ? '✓' : '✗'),
+        );
+
+        if (trace.status === 'crossed') {
+            status.className = 'ded-status is-no';
+            status.textContent = '✗ Ruled out by a past query.';
+            body.appendChild(el('p', { class: 'ded-explainer' },
+                'When you asked this verifier with the numbers below, this option was the only one that matched (●). The verifier answered FAIL — so this option cannot be the criterion.'));
+            const ul = el('ul', { class: 'ev-list' });
+            trace.target.failQueries.forEach(q => ul.appendChild(evidenceRow(q, false)));
+            body.appendChild(ul);
+            return this.openModal('deduction-modal');
+        }
+
+        if (trace.status === 'crossed-implied') {
+            status.className = 'ded-status is-no';
+            status.textContent = '✗ Ruled out by implication.';
+            body.appendChild(el('p', { class: 'ded-explainer' },
+                'Another option on this card has been directly confirmed by a past query — and a card has exactly one true criterion, so every other option must be ruled out.'));
+            const ul = el('ul', { class: 'ev-list' });
+            trace.directlyConfirmed.passQueries.forEach(q => ul.appendChild(evidenceRow(q, true)));
+            body.appendChild(el('p', { class: 'ded-explainer' },
+                'Confirmed option:'));
+            body.appendChild(el('p', { class: 'elim-label' },
+                labelToColoredNodes(trace.directlyConfirmed.label)));
+            body.appendChild(ul);
+            return this.openModal('deduction-modal');
+        }
+
+        if (trace.status === 'passed') {
+            status.className = 'ded-status is-ok';
+            status.textContent = '✓ Confirmed directly by a past query.';
+            body.appendChild(el('p', { class: 'ded-explainer' },
+                'This option was the ● in the query below and the verifier answered PASS — so this rule fits the criterion.'));
+            const ul = el('ul', { class: 'ev-list' });
+            trace.target.passQueries.forEach(q => ul.appendChild(evidenceRow(q, true)));
+            body.appendChild(ul);
+            return this.openModal('deduction-modal');
+        }
+
+        if (trace.status === 'confirmed-direct') {
+            status.className = 'ded-status is-ok';
+            status.textContent = '✓ Confirmed — directly proved AND only one option remained.';
+            body.appendChild(el('p', { class: 'ded-explainer' }, 'Direct evidence:'));
+            const ul = el('ul', { class: 'ev-list' });
+            trace.target.passQueries.forEach(q => ul.appendChild(evidenceRow(q, true)));
+            body.appendChild(ul);
+
+            const others = trace.perOpt.filter(p => p.idx !== trace.optionIdx);
+            const elim   = others.filter(p => p.ruledOut);
+            if (elim.length) {
+                body.appendChild(el('p', { class: 'ded-explainer' },
+                    'And the other options were ruled out:'));
+                body.appendChild(this._renderEliminationList(elim, evidenceRow));
+            }
+            return this.openModal('deduction-modal');
+        }
+
+        if (trace.status === 'confirmed-elim') {
+            status.className = 'ded-status is-ok';
+            status.textContent = '✓ Confirmed by elimination — it\'s the only option left.';
+            const others = trace.perOpt.filter(p => p.idx !== trace.optionIdx);
+            body.appendChild(el('p', { class: 'ded-explainer' },
+                'Every other option on this card has been ruled out by a past query, so this one must be the criterion:'));
+            body.appendChild(this._renderEliminationList(others.filter(p => p.ruledOut), evidenceRow));
+            return this.openModal('deduction-modal');
+        }
+
+        // Fallback / unknown — shouldn't be clickable since marker is empty.
+        status.className = 'ded-status';
+        status.textContent = 'No deduction yet — no past query has touched this option.';
+        return this.openModal('deduction-modal');
+    }
+
+    _renderEliminationList(eliminated, evidenceRowFn) {
+        const wrap = el('div', { class: 'elim-list' });
+        eliminated.forEach(p => {
+            wrap.appendChild(el('div', { class: 'elim-block' },
+                el('div', { class: 'elim-label' }, labelToColoredNodes(p.label)),
+                (() => {
+                    const ul = el('ul', { class: 'ev-list' });
+                    p.failQueries.forEach(q => ul.appendChild(evidenceRowFn(q, false)));
+                    return ul;
+                })()
+            ));
+        });
+        return wrap;
     }
 
     // ----- end screen -----
@@ -387,6 +565,13 @@ class UI {
 }
 
 // --- helpers ---------------------------------------------------------------
+// Inline SVG arrow used as the "active option" preview marker on verifier
+// cards. Pointing left so it visually reads as "← this rule fits the number".
+const PREVIEW_ARROW_SVG =
+    '<svg class="arrow-svg" viewBox="0 0 16 16" aria-hidden="true">' +
+    '<path d="M14 8 L3 8 M7 4 L3 8 L7 12" fill="none" stroke="currentColor" ' +
+    'stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
 // Replace every occurrence of a configured color name in `label` with a small
 // colored dot (`<span class="color-dot blue"/>` etc). Returns a DocumentFragment
 // so the result can be appended directly. The match is whole-word + case-

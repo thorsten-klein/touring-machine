@@ -115,7 +115,7 @@
 
                 <section id="digitmap-section">
                     <h3 class="section-title">Digit map</h3>
-                    <p class="hint digitmap-hint">Click a cell to cross out digits you've ruled out. Just a memory aid — doesn't affect the puzzle.</p>
+                    <p class="hint digitmap-hint"><strong>Just a memory aid — doesn't affect the puzzle. Click</strong> a cell to cross it out · <strong>Right-click</strong> (or <strong>long-press</strong> on touch) to mark it as a candidate (blue circle). A cell can be both.</p>
                     <div id="digitmap-wrap"><table id="digitmap-table"></table></div>
                 </section>
             </main>
@@ -271,6 +271,19 @@
         </div>
         <div class="menu-buttons">
             <button id="btn-close-rules" class="btn-back">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Deduction-trace modal (opened by clicking a verifier-card marker) -->
+<div id="deduction-modal" class="modal hidden">
+    <div class="modal-content">
+        <h3 id="ded-title">How was this deduced?</h3>
+        <div id="ded-subtitle" class="ded-subtitle"></div>
+        <div id="ded-status" class="ded-status"></div>
+        <div id="ded-body" class="ded-body"></div>
+        <div class="menu-buttons">
+            <button id="btn-close-deduction" class="btn-back">Close</button>
         </div>
     </div>
 </div>

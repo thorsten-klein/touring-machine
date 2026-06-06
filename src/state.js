@@ -12,9 +12,14 @@ class GameState {
     constructor(puzzle) {
         this.puzzle    = puzzle;             // { level, cards, solution }
         this.proposal  = GAME_CONFIG.colors.map(() => GAME_CONFIG.digitMin); // one dial per color
-        // Manual "digit map": per-color set of digits the player has marked
-        // impossible. Hand-curated — NOT derived from queries.
-        this.disabledDigits = GAME_CONFIG.colors.map(() => new Set());
+        // Manual "digit map" overlays. All per-color sets of digit values:
+        //   disabledDigits  — crossed off (definitely not this digit)
+        //   candidateDigits — circled (a likely candidate)
+        // Cells can be both at once (e.g. "I crossed it out but want to
+        // remember it was once a candidate"). Hand-curated — NOT derived
+        // from queries.
+        this.disabledDigits  = GAME_CONFIG.colors.map(() => new Set());
+        this.candidateDigits = GAME_CONFIG.colors.map(() => new Set());
         this.round     = 1;
         // Set by endRound() — the round counter only actually advances on the
         // next askVerifier(), so the player has a moment between rounds to
@@ -95,6 +100,10 @@ class GameState {
         const set = this.disabledDigits[colorIdx];
         if (set.has(digit)) set.delete(digit); else set.add(digit);
     }
+    toggleCandidateDigit(colorIdx, digit) {
+        const set = this.candidateDigits[colorIdx];
+        if (set.has(digit)) set.delete(digit); else set.add(digit);
+    }
 
     serialize() {
         return {
@@ -108,7 +117,8 @@ class GameState {
             guessedCode: this.guessedCode,
             startedAt: this.startedAt,
             // Hand-curated digit-map state — not derivable, must persist.
-            disabledDigits: this.disabledDigits.map(s => Array.from(s)),
+            disabledDigits:  this.disabledDigits.map(s => Array.from(s)),
+            candidateDigits: this.candidateDigits.map(s => Array.from(s)),
             pendingNewRound: this.pendingNewRound,
         };
         // Verifier-option deductions ARE derived from `queries`, so they
@@ -125,7 +135,9 @@ class GameState {
         s.outcome     = raw.outcome;
         s.guessedCode = raw.guessedCode;
         s.startedAt   = raw.startedAt || Date.now();
-        s.disabledDigits = (raw.disabledDigits || GAME_CONFIG.colors.map(() => []))
+        s.disabledDigits  = (raw.disabledDigits  || GAME_CONFIG.colors.map(() => []))
+            .map(a => new Set(a));
+        s.candidateDigits = (raw.candidateDigits || GAME_CONFIG.colors.map(() => []))
             .map(a => new Set(a));
         s.pendingNewRound = !!raw.pendingNewRound;
         return s;

@@ -354,8 +354,9 @@ body {
 
 /* --- Verifier cards row --- */
 #verifier-row {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 0.85rem;
 }
 .verifier-card {
@@ -367,8 +368,13 @@ body {
     flex-direction: column;
     gap: 0.55rem;
     position: relative;
-    max-width: 300px;
-    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    /* Width is set per-render by ui.js → _equalizeVerifierCardWidths so every
+       card is exactly as wide as the widest one (driven by the longest
+       unwrapped vqlog row / vtopic). flex: 0 0 auto so the cards don't
+       grow or shrink off that measured width. */
+    flex: 0 0 auto;
 }
 .verifier-card .vcard-head {
     display: flex;
@@ -396,6 +402,7 @@ body {
     font-size: 0.82rem;
     color: var(--text-muted);
     line-height: 1.25;
+    white-space: nowrap;
 }
 .verifier-card .vbtn {
     background: var(--surface-2);
@@ -431,16 +438,21 @@ body {
     user-select: none;
     transition: background 0.15s;
 }
-.verifier-card .vopt.crossed {
-    color: var(--text-dim);
-    text-decoration: line-through;
-    text-decoration-color: var(--fail-color);
+.verifier-card .vopt .preview {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    margin-left: 0.35rem;
+    line-height: 1;
 }
 .verifier-card .vopt .preview.pass {
     color: var(--color-yellow);
-    font-size: 1.4rem;
-    line-height: 1;
-    font-weight: 900;
+}
+.verifier-card .vopt .preview .arrow-svg {
+    width: 1.1em;
+    height: 1.1em;
+    display: block;
+    filter: drop-shadow(0 0 4px rgba(255, 213, 79, 0.35));
 }
 .verifier-card .vopt .preview.hidden-preview { display: none; }
 .verifier-card .vopt.confirmed {
@@ -473,15 +485,30 @@ body {
     justify-content: center;
     font-size: 0.7rem;
     line-height: 1;
+    cursor: help;
+    transition: transform 0.1s ease;
 }
-.verifier-card .vopt.crossed .marker {
-    border-color: var(--fail-color);
-    color: var(--fail-color);
+.verifier-card .vopt.confirmed .marker:hover,
+.verifier-card .vopt.passed .marker:hover,
+.verifier-card .vopt.ruledout .marker:hover {
+    transform: scale(1.25);
 }
-.verifier-card .vopt.confirmed .marker {
+.verifier-card .vopt.confirmed .marker,
+.verifier-card .vopt.passed .marker {
     border-color: var(--ok-color);
     background: var(--ok-color);
     color: #fff;
+}
+.verifier-card .vopt.ruledout .marker {
+    border-color: var(--fail-color);
+    color: var(--fail-color);
+}
+/* The row itself is NOT visually ruled out — no strike-through, no dim. */
+/* "Passed" (a past query confirmed this option) without yet being the sole
+   surviving possibility — give it the green ✓ on the marker but keep the
+   row's text styling neutral so it doesn't look like the criterion. */
+.verifier-card .vopt.passed {
+    color: var(--text-color);
 }
 .verifier-card .vqlog {
     margin-top: 0.25rem;
@@ -491,6 +518,11 @@ body {
     border-top: 1px dashed var(--border-color);
     padding-top: 0.45rem;
     line-height: 1.4;
+}
+/* Each query row stays on one line — verifier-card's min-width: min-content
+   uses this to derive the shared minimum width. */
+.verifier-card .vqlog > div {
+    white-space: nowrap;
 }
 .verifier-card .vqlog .ok   { color: var(--ok-color); }
 .verifier-card .vqlog .fail { color: var(--fail-color); }
@@ -683,12 +715,28 @@ body {
     font-size: 1.3rem;
     font-weight: 600;
     cursor: pointer;
+    -webkit-user-select: none;
+    -moz-user-select: none;
     user-select: none;
+    /* Long-press on iOS/Android pops a selection callout / magnifier and
+       starts dragging the cell text — disable both so the cell behaves as
+       a button, not selectable text. */
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
     transition: all 0.12s ease;
 }
-#digitmap-table .dm-cell:hover {
-    border-color: var(--primary-color);
-    color: var(--primary-color);
+#digitmap-table .dm-cell:focus,
+#digitmap-table .dm-cell:focus-visible {
+    outline: none;
+}
+/* Hover effects only on devices with a real pointer — otherwise the touch
+   "hover" state sticks after a tap, leaving a stale teal border around the
+   last-touched cell. */
+@media (hover: hover) {
+    #digitmap-table .dm-cell:hover {
+        border-color: var(--primary-color);
+        color: var(--primary-color);
+    }
 }
 #digitmap-table .dm-cell {
     position: relative;
@@ -718,8 +766,36 @@ body {
 }
 #digitmap-table .dm-cell.off::before { transform: translateY(-50%) rotate(28deg); }
 #digitmap-table .dm-cell.off::after  { transform: translateY(-50%) rotate(-28deg); }
-#digitmap-table .dm-cell.off:hover {
-    color: var(--text-muted);
+@media (hover: hover) {
+    #digitmap-table .dm-cell.off:hover {
+        color: var(--text-muted);
+    }
+}
+/* Candidate ring (right-click on PC, long-press on phone). A blue circle
+   inside the cell, drawn as a positioned ::before — but ::before is already
+   used by .off for the X. To allow co-existence we use a box-shadow inset
+   ring on .candidate so it composes cleanly with the cross. */
+#digitmap-table .dm-cell.candidate {
+    box-shadow:
+        inset 0 0 0 2px var(--color-blue),
+        0 0 8px rgba(30, 136, 229, 0.45);
+    color: var(--color-blue);
+    background: rgba(30, 136, 229, 0.08);
+    border-radius: 999px;
+}
+@media (hover: hover) {
+    #digitmap-table .dm-cell.candidate:hover {
+        background: rgba(30, 136, 229, 0.15);
+    }
+}
+/* When both flags are set, mute the cell so the candidate ring still reads
+   but the digit is visibly retired. The X still draws on top. */
+#digitmap-table .dm-cell.off.candidate {
+    color: var(--text-dim);
+    background: rgba(30, 136, 229, 0.03);
+    box-shadow:
+        inset 0 0 0 2px rgba(30, 136, 229, 0.45),
+        none;
 }
 
 /* --- Game footer: proposal panel locked above the action buttons.
@@ -1074,6 +1150,74 @@ body {
     color: var(--primary-color);
     font-size: 1.05rem;
     font-weight: 600;
+}
+
+/* --- Deduction trace modal --- */
+.ded-subtitle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1rem;
+    color: var(--text-color);
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--border-color);
+}
+.ded-subtitle .verifier-tag {
+    color: var(--primary-color);
+    font-family: var(--font-display);
+    font-weight: 600;
+}
+.ded-status {
+    font-size: 1.05rem;
+    font-weight: 600;
+    text-align: center;
+    padding: 0.5rem 0;
+}
+.ded-status.is-ok { color: var(--ok-color); }
+.ded-status.is-no { color: var(--fail-color); }
+.ded-body { display: flex; flex-direction: column; gap: 0.6rem; }
+.ded-explainer {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+.ev-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+.ev-list li {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.35rem 0.55rem;
+    background: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+}
+.ev-list .ev-round { color: var(--text-muted); min-width: 4.5rem; }
+.ev-list .ev-arrow { color: var(--text-dim); }
+.ev-list .ev-result.ok   { color: var(--ok-color); font-weight: 700; }
+.ev-list .ev-result.fail { color: var(--fail-color); font-weight: 700; }
+.elim-list { display: flex; flex-direction: column; gap: 0.55rem; }
+.elim-block {
+    padding: 0.4rem 0.5rem;
+    background: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+.elim-block .elim-label {
+    color: var(--text-color);
+    font-size: 0.95rem;
+}
+.elim-block .ev-list li {
+    background: rgba(0, 0, 0, 0.18);
 }
 
 /* --- Toast --- */

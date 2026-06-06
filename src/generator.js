@@ -25,6 +25,7 @@ function mulberry32(seed) {
         return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
 }
+/* istanbul ignore next -- pick is an unused utility kept for parity with shuffle */
 function pick(rng, arr) { return arr[Math.floor(rng() * arr.length)]; }
 function shuffle(rng, arr) {
     const a = arr.slice();
