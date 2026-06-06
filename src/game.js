@@ -12,8 +12,8 @@ class Game {
 
     // ---------- session lifecycle ----------
     startNew(level, seed) {
-        // Preset levels assume the default range + questions/round.
-        reconfigureGame({ digitMin: 1, digitMax: 5 });
+        // Preset levels assume the default range + questions/round + 3 colors.
+        reconfigureGame({ digitMin: 1, digitMax: 5, colors: ALL_COLORS.slice(0, 3) });
         GAME_CONFIG.questionsPerRound = 3;
         const puzzle = generatePuzzle(level, seed);
         this.beginWithPuzzle(puzzle);
@@ -25,11 +25,12 @@ class Game {
         const s = loadActive();
         if (!s) return false;
         // Apply the saved puzzle's config first, so dial range / pruning /
-        // per-round caps all match what the player started with.
+        // per-round caps / color set all match what the player started with.
         if (s.puzzle && s.puzzle.config) {
             reconfigureGame({
                 digitMin: s.puzzle.config.digitMin,
                 digitMax: s.puzzle.config.digitMax,
+                colors:   s.puzzle.config.colors,
             });
             if (s.puzzle.config.questionsPerRound) {
                 GAME_CONFIG.questionsPerRound = s.puzzle.config.questionsPerRound;
@@ -41,12 +42,14 @@ class Game {
     }
 
     beginWithPuzzle(puzzle) {
-        // Apply the puzzle's config (custom puzzles carry their own range
-        // and per-round question cap; presets always use the defaults).
+        // Apply the puzzle's config (custom puzzles carry their own range,
+        // color set, and per-round question cap; presets always use the
+        // defaults).
         if (puzzle.config) {
             reconfigureGame({
                 digitMin: puzzle.config.digitMin,
                 digitMax: puzzle.config.digitMax,
+                colors:   puzzle.config.colors,
             });
             if (puzzle.config.questionsPerRound) {
                 GAME_CONFIG.questionsPerRound = puzzle.config.questionsPerRound;
@@ -188,7 +191,8 @@ class Game {
             const c = s.puzzle.config;
             const v = c.verifiers || s.puzzle.cards.length;
             const q = c.questionsPerRound || GAME_CONFIG.questionsPerRound;
-            levelLabel = `Custom (${c.digitMin}–${c.digitMax}, ${v} verifiers, ${q}/round)`;
+            const colorCount = (c.colors && c.colors.length) || GAME_CONFIG.colors.length;
+            levelLabel = `Custom (${c.digitMin}–${c.digitMax}, ${colorCount} colors, ${v} verifiers, ${q}/round)`;
         }
         this.ui.setHeader({
             levelLabel,
@@ -375,19 +379,27 @@ class Game {
 
     // ---------- custom level flow ----------
     openCustomLevelModal() {
-        const cfg = { digitMin: 1, digitMax: 5, verifiers: 5, questionsPerRound: 3 };
+        const cfg = {
+            digitMin: 1, digitMax: 5,
+            colorCount: 3,
+            verifiers: 5,
+            questionsPerRound: 3,
+        };
         // Verifiers and questions/round have no theoretical max; the high
         // caps here are practical limits so the stepper has a stop.
         // `Infinity` in `verifiers.max` would let the player run away.
+        // colorCount is bounded by the master ALL_COLORS palette (3..7).
         const limits = {
             digitMin:          { min: 0,  max: 3  },
             digitMax:          { min: 3,  max: 9  },
+            colorCount:        { min: 3,  max: ALL_COLORS.length },
             verifiers:         { min: 1,  max: 99 },
             questionsPerRound: { min: 1,  max: 99 },
         };
         const valNodes = {
             digitMin:          document.getElementById('cfg-digit-min'),
             digitMax:          document.getElementById('cfg-digit-max'),
+            colorCount:        document.getElementById('cfg-color-count'),
             verifiers:         document.getElementById('cfg-verifiers'),
             questionsPerRound: document.getElementById('cfg-qpr'),
         };
@@ -400,6 +412,7 @@ class Game {
         const renderVals = () => {
             valNodes.digitMin.textContent          = String(cfg.digitMin);
             valNodes.digitMax.textContent          = String(cfg.digitMax);
+            valNodes.colorCount.textContent        = String(cfg.colorCount);
             valNodes.verifiers.textContent         = String(cfg.verifiers);
             valNodes.questionsPerRound.textContent = String(cfg.questionsPerRound);
         };
@@ -412,19 +425,37 @@ class Game {
 
         const statsBox = document.getElementById('custom-stats');
         const spinner  = document.getElementById('custom-spinner');
+        const abortBtn = document.getElementById('btn-custom-abort');
 
         // Probe the config in a non-blocking way. Runs the generator in
         // chunks of CHUNK attempts, yielding to the event loop between
         // chunks so the spinner keeps animating and the user can still
-        // edit values. Search is unbounded — it keeps going until a puzzle
-        // is found OR the user changes/cancels the config (invalidating
-        // checkToken). The current attempt count is shown live.
-        const CHUNK = 2000;
+        // edit values OR click Abort. Search is unbounded — it keeps going
+        // until a puzzle is found OR the user changes/cancels/aborts the
+        // config (invalidating checkToken). The current attempt count is
+        // shown live.
+        //
+        // CHUNK is adaptive: each generator attempt scans ALL_CODES roughly
+        // (verifiers + 1) times, so the per-tick cost is
+        //   CHUNK × |codespace| × (verifiers + 1)
+        // For 3 colors / 1-5 digits / 5 verifiers that's ~1.5M ops at the
+        // legacy CHUNK=2000 — fast. For 7 colors / 1-5 / 6 verifiers it would
+        // be ~1.1B ops per tick, freezing the UI for several seconds. We cap
+        // each chunk at roughly 1M inner ops so a tick always completes in
+        // tens of ms and the Abort button stays responsive.
+        const computeChunk = () => {
+            const span      = cfg.digitMax - cfg.digitMin + 1;
+            const codespace = Math.pow(span, cfg.colorCount);
+            const perAttempt = Math.max(1, codespace * (cfg.verifiers + 1));
+            const target    = 1_000_000;
+            return Math.max(20, Math.min(2000, Math.floor(target / perAttempt)));
+        };
         const runCheck = () => {
             checkToken++;
             const myToken = checkToken;
             startBtn.disabled = true;
             spinner.hidden = false;
+            abortBtn.hidden = false;
             setStatus('Searching for a valid law-set…', 'pending');
             clearTimeout(pendingTimer);
             // Show the config-derived stats immediately — search space and
@@ -433,6 +464,7 @@ class Game {
             renderConfigStats(cfg);
 
             let attempted = 0;
+            const chunkSize = computeChunk();
             const tryChunk = () => {
                 /* istanbul ignore if -- cancellation is a defensive race-guard; the cancel + reopen flow already covers it elsewhere */
                 if (myToken !== checkToken) { spinner.hidden = true; return; }
@@ -442,9 +474,10 @@ class Game {
                     puzzle = generatePuzzle('CUSTOM', undefined, {
                         digitMin: cfg.digitMin,
                         digitMax: cfg.digitMax,
+                        colorCount: cfg.colorCount,
                         verifiers: cfg.verifiers,
                         questionsPerRound: cfg.questionsPerRound,
-                        maxAttempts: CHUNK,
+                        maxAttempts: chunkSize,
                     });
                 } catch (e) { puzzle = null; }
                 /* istanbul ignore if -- generatePuzzle is synchronous, so checkToken can't change between the call and this check */
@@ -452,6 +485,7 @@ class Game {
 
                 if (puzzle) {
                     spinner.hidden = true;
+                    abortBtn.hidden = true;
                     startBtn.disabled = false;
                     setStatus('Looks good! Click Start to play.', 'ok');
                     // Stats already shown from renderConfigStats(); nothing
@@ -459,7 +493,7 @@ class Game {
                     return;
                 }
 
-                attempted += CHUNK;
+                attempted += chunkSize;
                 // Keep searching with a fresh seed — generator re-seeds
                 // internally, so we just yield to the event loop and retry.
                 setStatus(`Searching for a valid law-set… (${attempted.toLocaleString()} combinations tried)`, 'pending');
@@ -475,7 +509,13 @@ class Game {
         // CARDS reflects the requested range, then estimates the puzzle-
         // level stats from the average options-per-card.
         const renderConfigStats = (cfg) => {
-            try { reconfigureGame({ digitMin: cfg.digitMin, digitMax: cfg.digitMax }); }
+            try {
+                reconfigureGame({
+                    digitMin: cfg.digitMin,
+                    digitMax: cfg.digitMax,
+                    colors:   ALL_COLORS.slice(0, cfg.colorCount),
+                });
+            }
             catch (e) { /* leave previous CARDS */ }
             const span = cfg.digitMax - cfg.digitMin + 1;
             const codeSpace = Math.pow(span, GAME_CONFIG.colors.length);
@@ -532,9 +572,23 @@ class Game {
         runCheck();
         this.ui.openModal('custom-level-modal');
 
+        // Abort the in-flight law-set search without closing the modal —
+        // the user can then tweak the config and re-trigger by clicking a
+        // stepper. Generous configs (large slot/verifier counts) can take a
+        // while; without this they were stuck waiting or had to cancel out.
+        abortBtn.onclick = () => {
+            checkToken++; // invalidate any pending chunk
+            clearTimeout(pendingTimer);
+            spinner.hidden = true;
+            abortBtn.hidden = true;
+            startBtn.disabled = true;
+            setStatus('Search aborted. Adjust the configuration to retry.', 'bad');
+        };
+
         document.getElementById('btn-cancel-custom').onclick = () => {
             checkToken++; // invalidate any pending check
             document.getElementById('custom-spinner').hidden = true;
+            abortBtn.hidden = true;
             this.ui.closeModal('custom-level-modal');
         };
         document.getElementById('btn-start-custom').onclick = () => {
@@ -542,6 +596,7 @@ class Game {
             const puzzle = generatePuzzle('CUSTOM', undefined, {
                 digitMin: cfg.digitMin,
                 digitMax: cfg.digitMax,
+                colorCount: cfg.colorCount,
                 verifiers: cfg.verifiers,
                 questionsPerRound: cfg.questionsPerRound,
             });

@@ -598,11 +598,16 @@ function labelToColoredNodes(label) {
 
 function formatProposalNode(proposal) {
     // One small span per color slot — coloring driven by the slot name so the
-    // helper keeps working when GAME_CONFIG.colors changes.
+    // helper keeps working when GAME_CONFIG.colors changes. We emit BOTH the
+    // legacy first-letter class ("pb"/"py"/"pp") for back-compat with the
+    // original 3-color palette AND a full-name class ("p-blue") so newer
+    // colors (green/grey) that collide on first letter still style correctly.
     const span = el('span', {});
     GAME_CONFIG.colors.forEach((c, i) => {
         if (i > 0) span.appendChild(document.createTextNode('-'));
-        span.appendChild(el('span', { class: 'p' + c[0] }, String(proposal[i])));
+        span.appendChild(el('span',
+            { class: 'p' + c[0] + ' p-' + c },
+            String(proposal[i])));
     });
     return span;
 }

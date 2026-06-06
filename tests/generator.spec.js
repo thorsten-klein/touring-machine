@@ -19,7 +19,7 @@ test('generatePuzzle: preset + custom + opts variants (verifiers / qpr / digit r
     });
 });
 
-test('encodeGameId / decodeGameId round-trip for preset and custom (with and without Q suffix)', async ({ page }) => {
+test('encodeGameId / decodeGameId round-trip for preset and custom (with and without Q / N suffix)', async ({ page }) => {
     await page.goto('');
     await page.evaluate(() => {
         const preset = generatePuzzle('EASY', 100);
@@ -30,6 +30,13 @@ test('encodeGameId / decodeGameId round-trip for preset and custom (with and wit
         const cq2 = generatePuzzle('CUSTOM', 102, { digitMin: 1, digitMax: 5, verifiers: 3, questionsPerRound: 2 });
         if (!encodeGameId(cq2).includes('Q')) throw new Error('non-default qpr should emit Q');
         if (!decodeGameId(encodeGameId(cq2))) throw new Error('custom decode failed');
+        // Custom with extra colors → ID must include N<count> and round-trip.
+        const c4 = generatePuzzle('CUSTOM', 103, { digitMin: 1, digitMax: 5, colorCount: 4, verifiers: 3, questionsPerRound: 3 });
+        const c4id = encodeGameId(c4);
+        if (!c4id.includes('N4')) throw new Error('non-default color count should emit N');
+        if (!decodeGameId(c4id)) throw new Error('custom 4-color decode failed');
+        // Restore default config so later tests aren't affected.
+        reconfigureGame({ digitMin: 1, digitMax: 5, colors: ALL_COLORS.slice(0, 3) });
     });
 });
 
@@ -43,6 +50,7 @@ test('decodeGameId: every error path throws', async ({ page }) => {
             ['unknownPrefix', 'Zfoo'],
             ['badCustom', 'Cnope'],
             ['rangeOOB', 'C9_2_11.0'],
+            ['badColors', 'C1_5N2_11.0'],
             ['badQpr', 'C1_5Q0_11.0'],
             ['unknownCard', 'E9999.0'],
             ['badOpt', 'E11.99'],

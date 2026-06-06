@@ -32,3 +32,26 @@ test('reconfigureGame: digitMin/digitMax/colors all apply, with and without each
         reconfigureGame({ digitMin: 1, digitMax: 5 });
     });
 });
+
+test('reconfigureGame: 4-color (even N) hits card-16 tie branch + parity-scaling for new color', async ({ page }) => {
+    await page.goto('');
+    await page.evaluate(() => {
+        const r = reconfigureGame({ colors: ALL_COLORS.slice(0, 4) });
+        if (r.cards <= 0) throw new Error('4-color reconfigure produced no cards');
+        if (r.codes !== Math.pow(5, 4)) throw new Error('expected 5^4 codes for 4-color/1-5');
+        // Card 16 must expose the "equal evens and odds" option that only
+        // exists for even N (covers the N % 2 === 0 branch in buildOriginalCards).
+        const c16 = CARDS_BY_ID[16];
+        if (!c16) throw new Error('card 16 missing under 4 colors');
+        if (!c16.options.some(o => /Equal/i.test(o.label))) {
+            throw new Error('card 16 missing the "equal" option for even N');
+        }
+        // Parity scaling card for green must exist (par_green family) since
+        // the hand-written set only covers parB / parY / parP.
+        if (!CARDS.some(c => c.family === 'par_green')) {
+            throw new Error('expected parity scaling card for green');
+        }
+        // Restore defaults so other tests see the canonical state.
+        reconfigureGame({ digitMin: 1, digitMax: 5, colors: ALL_COLORS.slice(0, 3) });
+    });
+});
