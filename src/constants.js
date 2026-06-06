@@ -16,10 +16,15 @@
 // `enumerateCodes()` returns every possible code under the current config;
 // criteria.js exposes it as `ALL_CODES` for convenience.
 
+// Master list of supported color slots, in the order they're activated when a
+// puzzle is configured with more than 3 colors. Custom levels can choose to
+// use anywhere from 3 to ALL_COLORS.length of these.
+const ALL_COLORS = ['blue', 'yellow', 'purple', 'green', 'orange', 'grey', 'red'];
+
 const GAME_CONFIG = {
     digitMin: 1,
     digitMax: 5,
-    colors: ['blue', 'yellow', 'purple'],
+    colors: ALL_COLORS.slice(0, 3),
     maxVerifiers: 6,
     questionsPerRound: 3,
 };

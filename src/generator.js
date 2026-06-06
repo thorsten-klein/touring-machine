@@ -13,7 +13,10 @@
 //      "no verifier is superfluous")
 //   3. No two verifiers share the same card family — keeps puzzles varied.
 
-const VERIFIER_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F'];
+// Single-letter verifier labels. Extended to 'Z' so custom levels with a high
+// verifier count still get distinct labels; the visible card row only uses as
+// many letters as the puzzle has verifiers.
+const VERIFIER_LETTERS = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z'];
 
 // --- random helpers (seeded, deterministic so a seed reproduces a puzzle) ---
 function mulberry32(seed) {
@@ -66,17 +69,26 @@ const LEVELS = {
 };
 
 // --- generate a puzzle for a given level, optionally from a seed -----------
-// opts: { verifiers, digitMin, digitMax, maxAttempts, signal }
-//   - verifiers/digitMin/digitMax override the LEVELS default and GAME_CONFIG
-//     (applied via reconfigureGame BEFORE attempting generation, so the
-//     pruning is correct for the requested range).
+// opts: { verifiers, digitMin, digitMax, colorCount, maxAttempts, signal }
+//   - verifiers/digitMin/digitMax/colorCount override the LEVELS default and
+//     GAME_CONFIG (applied via reconfigureGame BEFORE attempting generation,
+//     so the pruning is correct for the requested range and slot count).
+//   - colorCount (3..ALL_COLORS.length) picks how many color slots the code
+//     has. Defaults to the current GAME_CONFIG.colors length.
 //   - maxAttempts caps the search budget (default 4000).
 //   - signal: { aborted } poll-checked between attempts, lets the caller
 //     interrupt a long-running search.
 // Returns the puzzle on success, or null if the budget is exhausted / aborted.
 function generatePuzzle(level, seed, opts = {}) {
-    if (opts.digitMin !== undefined || opts.digitMax !== undefined) {
-        reconfigureGame({ digitMin: opts.digitMin, digitMax: opts.digitMax });
+    if (opts.digitMin !== undefined || opts.digitMax !== undefined || opts.colorCount !== undefined) {
+        const reconf = {
+            digitMin: opts.digitMin,
+            digitMax: opts.digitMax,
+        };
+        if (opts.colorCount !== undefined) {
+            reconf.colors = ALL_COLORS.slice(0, opts.colorCount);
+        }
+        reconfigureGame(reconf);
     }
     const verifiers = opts.verifiers !== undefined ? opts.verifiers
                     : (level === 'CUSTOM' ? 5 : LEVELS[level].verifiers);
@@ -109,6 +121,7 @@ function generatePuzzle(level, seed, opts = {}) {
             config: {
                 digitMin: GAME_CONFIG.digitMin,
                 digitMax: GAME_CONFIG.digitMax,
+                colors: GAME_CONFIG.colors.slice(),
                 verifiers,
                 questionsPerRound,
             },
@@ -124,20 +137,25 @@ function generatePuzzle(level, seed, opts = {}) {
 // --- game id codec ----------------------------------------------------------
 // Preset format: <levelChar><cardId>.<opt>-<cardId>.<opt>-...
 //   Example: "M11.0-23.2-4.1-9.3-21.0"
-// Custom format: "C<digitMin>_<digitMax>_<cardList>"
-//   Example: "C1_7_5.1-12.2-23.0-31.2-17.1" → digits 1..7, 5 verifiers.
-// Self-describing and short enough for a URL.
+// Custom format: "C<digitMin>_<digitMax>[N<colorCount>][Q<qpr>]_<cardList>"
+//   Example: "C1_7_5.1-12.2-23.0-31.2-17.1" → digits 1..7, 3 colors (default).
+//   Example: "C1_5N5_..." → digits 1..5 with 5 color slots.
+// Self-describing and short enough for a URL. N/Q suffixes are only emitted
+// when they differ from the default so legacy IDs stay compact and parseable.
 const LEVEL_CHAR = { EASY:'E', MEDIUM:'M', HARD:'H' };
 const CHAR_LEVEL = { E:'EASY',  M:'MEDIUM',  H:'HARD'  };
 
 function encodeGameId(puzzle) {
     const body = puzzle.cards.map(({id, opt}) => `${id}.${opt}`).join('-');
     if (puzzle.level === 'CUSTOM') {
-        const { digitMin, digitMax, questionsPerRound } = puzzle.config;
-        // Only emit the Q suffix when it differs from the default (3); keeps
-        // older shared IDs short and forward-compatible.
+        const { digitMin, digitMax, questionsPerRound, colors } = puzzle.config;
+        const colorCount = (colors && colors.length) || 3;
+        // Only emit the N/Q suffixes when they differ from the defaults (3
+        // colors / 3 questions-per-round); keeps older shared IDs short and
+        // forward-compatible.
+        const n = colorCount !== 3 ? `N${colorCount}` : '';
         const q = (questionsPerRound && questionsPerRound !== 3) ? `Q${questionsPerRound}` : '';
-        return `C${digitMin}_${digitMax}${q}_${body}`;
+        return `C${digitMin}_${digitMax}${n}${q}_${body}`;
     }
     return `${LEVEL_CHAR[puzzle.level]}${body}`;
 }
@@ -148,30 +166,41 @@ function decodeGameId(id) {
 
     let level, body, customConfig = null;
     if (ch === 'C') {
-        // Custom: read the digit range (and optional questions-per-round)
-        // from the ID, reconfigure the runtime BEFORE looking up cards
-        // (pruned card sets differ by range).
+        // Custom: read the digit range (and optional color-count /
+        // questions-per-round) from the ID, reconfigure the runtime BEFORE
+        // looking up cards (pruned card sets differ by range and colors).
         const rest = id.slice(1);
-        // Accept either "min_maxQqpr_cards" or legacy "min_max_cards".
-        const m = rest.match(/^(\d+)_(\d+)(?:Q(\d+))?_(.+)$/);
+        // Order: digitMin _ digitMax [N<colors>] [Q<qpr>] _ cards
+        // Legacy forms ("min_max_cards", "min_maxQqpr_cards") still parse —
+        // both N and Q are independently optional.
+        const m = rest.match(/^(\d+)_(\d+)(?:N(\d+))?(?:Q(\d+))?_(.+)$/);
         if (!m) throw new Error('Malformed custom game id');
-        const digitMin = parseInt(m[1]);
-        const digitMax = parseInt(m[2]);
-        const qpr      = m[3] ? parseInt(m[3]) : 3;
+        const digitMin   = parseInt(m[1]);
+        const digitMax   = parseInt(m[2]);
+        const colorCount = m[3] ? parseInt(m[3]) : 3;
+        const qpr        = m[4] ? parseInt(m[4]) : 3;
         if (!(digitMin >= 0 && digitMax > digitMin && digitMax <= 9)) {
             throw new Error('Custom digit range out of bounds');
         }
+        if (!(colorCount >= 3 && colorCount <= ALL_COLORS.length)) {
+            throw new Error('Custom color count out of bounds');
+        }
         if (!(qpr >= 1)) throw new Error('Custom questions/round out of bounds');
-        customConfig = { digitMin, digitMax, questionsPerRound: qpr };
-        reconfigureGame({ digitMin, digitMax });
+        const colorList = ALL_COLORS.slice(0, colorCount);
+        customConfig = {
+            digitMin, digitMax,
+            colors: colorList,
+            questionsPerRound: qpr,
+        };
+        reconfigureGame({ digitMin, digitMax, colors: colorList });
         level = 'CUSTOM';
-        body = m[4];
+        body = m[5];
     } else if (ch in CHAR_LEVEL) {
         level = CHAR_LEVEL[ch];
         body  = id.slice(1);
         // Preset levels assume the default config; if the runtime was last
         // reconfigured for a custom puzzle, restore it now.
-        reconfigureGame({ digitMin: 1, digitMax: 5 });
+        reconfigureGame({ digitMin: 1, digitMax: 5, colors: ALL_COLORS.slice(0, 3) });
     } else {
         throw new Error('Unknown level prefix');
     }
@@ -195,12 +224,14 @@ function decodeGameId(id) {
             ? {
                 digitMin: customConfig.digitMin,
                 digitMax: customConfig.digitMax,
+                colors: customConfig.colors.slice(),
                 verifiers: cards.length,
                 questionsPerRound: customConfig.questionsPerRound,
               }
             : {
                 digitMin: GAME_CONFIG.digitMin,
                 digitMax: GAME_CONFIG.digitMax,
+                colors: GAME_CONFIG.colors.slice(),
                 verifiers: cards.length,
                 questionsPerRound: GAME_CONFIG.questionsPerRound,
               },

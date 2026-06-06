@@ -97,6 +97,30 @@ test('custom modal: cancellation branches via overridden setTimeout delay', asyn
     await page.click('#btn-cancel-custom');
 });
 
+test('custom modal: Abort button cancels in-flight search without closing modal', async ({ page }) => {
+    test.setTimeout(20000);
+    await page.goto('');
+    // Force every chunk to come back null so the search loop keeps going —
+    // gives the test a stable in-flight state to abort.
+    await page.evaluate(() => {
+        window.__origGP = generatePuzzle;
+        // eslint-disable-next-line no-global-assign
+        generatePuzzle = () => null;
+    });
+    await page.click('#btn-start-game');
+    await page.click('#level-options .level-option:has(strong:text("Custom"))');
+    // Abort button should appear while a search is running.
+    await expect(page.locator('#btn-custom-abort')).toBeVisible();
+    await page.click('#btn-custom-abort');
+    // Status flips to the aborted message; the modal stays open and the
+    // Abort button hides until the next search.
+    await expect(page.locator('#custom-status.bad')).toContainText('aborted');
+    await expect(page.locator('#btn-custom-abort')).toBeHidden();
+    await expect(page.locator('#custom-level-modal')).toBeVisible();
+    await page.evaluate(() => { generatePuzzle = window.__origGP; });
+    await page.click('#btn-cancel-custom');
+});
+
 test('custom modal: Start when generatePuzzle returns null → toast fallback', async ({ page }) => {
     await page.goto('');
     await page.click('#btn-start-game');

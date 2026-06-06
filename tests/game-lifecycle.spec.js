@@ -106,6 +106,9 @@ test('renderAll: CUSTOM-level header with full + missing config fields', async (
         const p = generatePuzzle('CUSTOM', 5, { digitMin: 1, digitMax: 5, verifiers: 3, questionsPerRound: 3 });
         delete p.config.verifiers;
         delete p.config.questionsPerRound;
+        // Drop the colors field too so the colorCount fallback uses
+        // GAME_CONFIG.colors.length (covers the || branch in renderAll).
+        delete p.config.colors;
         window.game.startWithPuzzle(p);
     });
 });
