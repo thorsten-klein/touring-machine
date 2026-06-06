@@ -139,6 +139,17 @@
             <div class="end-content-container">
                 <h2 id="end-title" class="subtitle"></h2>
                 <p id="end-stats"></p>
+                <div id="end-expected" class="end-expected" hidden>
+                    <span class="exp-label">Expected average</span>
+                    <span id="end-expected-vals" class="exp-vals"></span>
+                </div>
+                <div id="end-ranking" class="end-ranking" hidden>
+                    <div id="end-rank-badge" class="rank-badge"></div>
+                    <div id="end-rank-title" class="rank-title"></div>
+                    <div id="end-rank-flavor" class="rank-flavor"></div>
+                    <div id="end-rank-score" class="rank-score"></div>
+                    <ol id="end-rank-ladder" class="rank-ladder"></ol>
+                </div>
                 <div id="end-solution-block">
                     <p id="end-solution-label">The code was:</p>
                     <div id="end-solution-row"></div>
@@ -257,7 +268,7 @@
     <div class="modal-content rules-content">
         <h3>How to play</h3>
         <div id="rules-body">
-            <p>The <strong>code</strong> is three digits — one each of <span class="dot blue"></span>blue, <span class="dot yellow"></span>yellow, and <span class="dot purple"></span>purple — each between <strong>1 and 5</strong>.</p>
+            <p>The <strong>code</strong> is three digits — each between <strong>1 and 5</strong>. The first digit is marked <span class="dot blue"></span>blue, second digit is <span class="dot yellow"></span>yellow, and third digit is <span class="dot purple"></span>purple</p>
             <p>Each <strong>Verifier</strong> (A, B, C…) checks one secret <strong>criterion</strong>. Each verifier card shows the topic and a list of possible criteria — exactly one is the real one. Your job: deduce which.</p>
             <p><strong>Each round</strong>:</p>
             <ol>
