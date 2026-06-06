@@ -455,11 +455,9 @@ body {
     filter: drop-shadow(0 0 4px rgba(255, 213, 79, 0.35));
 }
 .verifier-card .vopt .preview.hidden-preview { display: none; }
-.verifier-card .vopt.confirmed {
-    background: rgba(76, 175, 80, 0.10);
-    color: var(--ok-color);
-    font-weight: 500;
-}
+/* Confirmed rows used to be filled with green tint, but the marker (left ✓)
+   already carries that signal — the row itself stays neutral so the live
+   yellow arrow can still appear on it like on any other option. */
 /* Inline color-name substitute. Sized to sit naturally inside running text;
    --color-X vars feed the per-name modifier classes. */
 .color-dot {
@@ -843,6 +841,147 @@ body {
 }
 #end-title.win  { color: var(--ok-color); }
 #end-title.lose { color: var(--fail-color); }
+/* Expected-average line, sits above the ranking panel on the end screen. */
+.end-expected {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.4rem 0.8rem;
+    background: var(--surface-elev);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    font-size: 0.88rem;
+    color: var(--text-muted);
+}
+.end-expected .exp-label {
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+}
+.end-expected .exp-vals {
+    color: var(--text-color);
+    font-family: var(--font-mono);
+}
+
+/* Funny ranking panel, only on win. Five tiers from "Turing's Heir" down to
+   "Brute-Force Champion" — see classifyWin / WIN_TIERS in ui.js.
+
+   Each tier carries an --rank-color set on the `.tier-N` modifier so the
+   badge, title, and the highlighted ladder rung all light up in the same
+   colour. Top tier = teal (primary), then yellow / orange / pinkish / red. */
+.end-ranking.tier-0 { --rank-color: var(--primary-color); }
+.end-ranking.tier-1 { --rank-color: #f1c40f; }
+.end-ranking.tier-2 { --rank-color: #ffb74d; }
+.end-ranking.tier-3 { --rank-color: #ff8a80; }
+.end-ranking.tier-4 { --rank-color: #ef5350; }
+.end-ranking.tier-5 { --rank-color: #ba68c8; } /* Lucky Gambler — purple/magic */
+.end-ranking {
+    width: 100%;
+    max-width: 460px;
+    background: linear-gradient(135deg, rgba(0, 212, 170, 0.10), rgba(255, 255, 255, 0.02));
+    border: 1px solid var(--rank-color, var(--primary-color));
+    border-radius: 12px;
+    padding: 1rem 1.1rem;
+    text-align: center;
+    box-shadow: 0 0 18px color-mix(in srgb, var(--rank-color, var(--primary-color)) 35%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+.end-ranking .rank-badge {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 2px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+}
+.end-ranking .rank-title {
+    font-family: var(--font-display);
+    font-size: 1.7rem;
+    color: var(--rank-color, var(--primary-color));
+    letter-spacing: 1.5px;
+    text-shadow: 0 0 14px color-mix(in srgb, var(--rank-color, var(--primary-color)) 40%, transparent);
+}
+.end-ranking .rank-flavor {
+    font-style: italic;
+    color: var(--text-color);
+    font-size: 0.95rem;
+    line-height: 1.4;
+}
+.end-ranking .rank-score {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    padding-bottom: 0.45rem;
+    border-bottom: 1px dashed var(--border-color);
+    text-align: left;
+    line-height: 1.5;
+}
+.end-ranking .rank-score .score-hint {
+    color: var(--text-dim);
+}
+.end-ranking .rank-score .score-combined {
+    margin-top: 0.25rem;
+}
+.end-ranking .rank-score .score-combined strong {
+    color: var(--rank-color, var(--primary-color));
+    font-weight: 700;
+}
+.end-ranking .rank-ladder {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin: 0;
+    padding: 0;
+    text-align: left;
+}
+.end-ranking .rank-rung {
+    display: grid;
+    grid-template-columns: 1.6rem 1fr auto;
+    align-items: baseline;
+    gap: 0.55rem;
+    padding: 0.4rem 0.55rem;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.02);
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+.end-ranking .rank-rung .rung-num {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--text-dim);
+    text-align: right;
+}
+.end-ranking .rank-rung .rung-title { color: var(--text-color); }
+.end-ranking .rank-rung .rung-threshold {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-dim);
+}
+/* Per-rung colour modifier — only the current one paints in its tier colour. */
+.end-ranking .rank-rung.current.tier-0 { --rung-color: var(--primary-color); }
+.end-ranking .rank-rung.current.tier-1 { --rung-color: #f1c40f; }
+.end-ranking .rank-rung.current.tier-2 { --rung-color: #ffb74d; }
+.end-ranking .rank-rung.current.tier-3 { --rung-color: #ff8a80; }
+.end-ranking .rank-rung.current.tier-4 { --rung-color: #ef5350; }
+.end-ranking .rank-rung.current.tier-5 { --rung-color: #ba68c8; }
+/* Always emphasise the Lucky rung slightly — it's an outlier from the score
+   scale, so a dashed border separates it visually from tiers 1–5. */
+.end-ranking .rank-rung.lucky { border-top: 1px dashed var(--border-color); margin-top: 0.2rem; padding-top: 0.55rem; }
+.end-ranking .rank-rung.lucky .rung-num { color: #ba68c8; }
+.end-ranking .rank-rung.current {
+    background: color-mix(in srgb, var(--rung-color) 14%, transparent);
+    border-color: var(--rung-color);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--rung-color) 25%, transparent);
+}
+.end-ranking .rank-rung.current .rung-num,
+.end-ranking .rank-rung.current .rung-title {
+    color: var(--rung-color);
+    font-weight: 600;
+}
 #end-stats { color: var(--text-muted); }
 #end-solution-row {
     display: flex;

@@ -154,6 +154,24 @@ test('onAsk when askVerifier returns null', async ({ page }) => {
     });
 });
 
+// Covers the ✗-half of the toast ternary on game.js (Verifier X → ✗).
+// askVerifier is stubbed to return false directly so we don't depend on
+// whether a particular puzzle/proposal actually fails. We read the toast's
+// textContent synchronously via page.evaluate (not toContainText) so the
+// assertion can't race with the toast's own auto-hide timer on slow CI.
+test('onAsk toast renders the ✗ branch when verifier answers FAIL', async ({ page }) => {
+    await page.goto('');
+    await startEasyGame(page, 11);
+    const toastText = await page.evaluate(() => {
+        window.game.state.askVerifier = () => false;
+        window.game.onAsk(0);
+        return document.getElementById('toast').textContent;
+    });
+    if (!toastText || !toastText.includes('✗')) {
+        throw new Error(`expected ✗ in toast, got: ${JSON.stringify(toastText)}`);
+    }
+});
+
 test('btn-back from game returns to main menu', async ({ page }) => {
     await page.goto('');
     await startEasyGame(page, 10);

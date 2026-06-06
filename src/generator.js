@@ -42,14 +42,67 @@ function solutionsFor(puzzle) {
     return ALL_CODES.filter(code => tests.every(t => t(code)));
 }
 
+// Count matching codes but stop as soon as `cap+1` are found — most callers
+// only need to know "exactly 1" or "≤ 1", so enumerating the full code
+// space when the second match has already shown up is pure waste.
+function solutionCountUpTo(puzzle, cap) {
+    const tests = puzzle.cards.map(({id, opt}) => CARDS_BY_ID[id].options[opt].test);
+    let c = 0;
+    for (const code of ALL_CODES) {
+        if (tests.every(t => t(code))) {
+            c++;
+            if (c > cap) return c;
+        }
+    }
+    return c;
+}
+
+// First two whitespace-separated tokens of an option label — used to detect
+// near-duplicate cards across a puzzle (e.g. both a "Blue compared to 3"
+// and a "Blue below or above 5" card would share the prefix "Blue <"). Two
+// verifiers with the same prefix on any of their options end up reading like
+// the same kind of question, which is confusing for the player.
+function optionPrefix(label) {
+    return label.split(/\s+/).slice(0, 2).join(' ');
+}
+
+// Memoised set of option prefixes for a card. Cached on the card object
+// itself; reconfigureGame swaps in a fresh CARDS array so the cache never
+// outlives the config it was built for.
+function cardPrefixes(card) {
+    if (!card._prefixes) {
+        card._prefixes = new Set(card.options.map(o => optionPrefix(o.label)));
+    }
+    return card._prefixes;
+}
+
 function isValidPuzzle(puzzle) {
     const sols = solutionsFor(puzzle);
     if (sols.length !== 1) return false;
+    const solution = sols[0];
+
     // Every verifier must be essential: drop it → >1 solution must remain.
+    // We only care whether the count exceeds 1; solutionCountUpTo bails as
+    // soon as the second hit shows up.
     for (let i = 0; i < puzzle.cards.length; i++) {
         const dropped = { cards: puzzle.cards.filter((_, j) => j !== i) };
-        if (solutionsFor(dropped).length === 1) return false;
+        if (solutionCountUpTo(dropped, 1) === 1) return false;
     }
+
+    // For each card, the solution must activate EXACTLY ONE option. Cards
+    // whose options aren't mutually exclusive on the solution (e.g. "sum is
+    // a multiple of 3" and "…of 4" both true when sum=12) would let the
+    // player query with the solution itself and not know which option fits.
+    for (const { id } of puzzle.cards) {
+        const def = CARDS_BY_ID[id];
+        let pass = 0;
+        for (const opt of def.options) if (opt.test(solution)) pass++;
+        if (pass !== 1) return false;
+    }
+    // Prefix-uniqueness is enforced at card-selection time in generatePuzzle
+    // (so we don't even build puzzles that would fail it), so no need to
+    // re-check it here.
+
     return true;
 }
 
@@ -83,7 +136,11 @@ function generatePuzzle(level, seed, opts = {}) {
     const questionsPerRound = opts.questionsPerRound !== undefined
         ? opts.questionsPerRound
         : (level === 'CUSTOM' ? 3 : GAME_CONFIG.questionsPerRound);
-    const maxAttempts = opts.maxAttempts || 4000;
+    // Default budget bumped to account for the stricter `isValidPuzzle`
+    // constraints (solution must activate exactly one option per card AND no
+    // two cards may share an option prefix). HARD (6 verifiers) needs a few
+    // thousand attempts on average; this leaves comfortable headroom.
+    const maxAttempts = opts.maxAttempts || 100000;
     const baseSeed = (seed === undefined) ? Math.floor(Math.random() * 0xFFFFFFFF) : seed;
     let attempt = 0;
     while (attempt < maxAttempts) {
@@ -93,13 +150,26 @@ function generatePuzzle(level, seed, opts = {}) {
         const shuffled = shuffle(rng, CARDS);
         const chosen = [];
         const usedFamilies = new Set();
+        // Tracks option-prefixes of cards already picked in this attempt so
+        // we can skip any incoming card that would collide BEFORE handing
+        // the puzzle to isValidPuzzle. Early-rejecting here is the big win:
+        // most random combinations would fail the prefix-uniqueness check,
+        // and dropping them now skips the 125-code enumeration entirely.
+        const usedPrefixes = new Set();
         for (const card of shuffled) {
             if (chosen.length === verifiers) break;
             /* istanbul ignore if -- with the default pruned card pool, no two surviving cards share a family, so this dedup is defensive against future config changes */
             if (usedFamilies.has(card.family)) continue;
+            const prefs = cardPrefixes(card);
+            let clash = false;
+            for (const p of prefs) {
+                if (usedPrefixes.has(p)) { clash = true; break; }
+            }
+            if (clash) continue;
             const opt = Math.floor(rng() * card.options.length);
             chosen.push({ id: card.id, opt });
             usedFamilies.add(card.family);
+            for (const p of prefs) usedPrefixes.add(p);
         }
         if (chosen.length < verifiers) continue;
         const puzzle = {

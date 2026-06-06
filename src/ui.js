@@ -227,10 +227,11 @@ class UI {
                 const title = isConfirmed ? 'This must be the criterion'
                             : isCross    ? 'Past query: FAIL on this rule'
                             :               'Still possible';
-                // Right-side indicator: just the live ● for whatever option
-                // the current number activates. Past verdicts show on the
-                // LEFT marker as ✓/✗.
-                const wouldPass = proposal && !isConfirmed && opt.test(proposal);
+                // Right-side indicator: just the live ← arrow whenever the
+                // current number activates this option, regardless of any
+                // past verdict on the row. Past verdicts live on the LEFT
+                // marker (✓/✗).
+                const wouldPass = proposal && opt.test(proposal);
                 const preview = el('span', {
                     class: 'preview' + (wouldPass ? ' pass' : ' hidden-preview'),
                     title: wouldPass ? 'Current number would PASS this rule' : '',
@@ -329,15 +330,11 @@ class UI {
                 const node = document.querySelector(
                     `.verifier-card[data-vidx="${i}"] .vopt[data-oi="${oi}"] .preview`);
                 if (!node) return;
-                // Right side only ever shows the live ● for currently-active
-                // options. Past verdicts (✓) live in the LEFT marker, which
-                // is set in renderVerifiers and is not touched on dial ticks.
-                // We don't rule anything out on the verifier card, so even
-                // options previously seen as FAIL still get the live ● when
-                // the current number activates them.
-                const live = ded.confirmed !== oi
-                          && !(ded.passed && ded.passed.has(oi));
-                const ok = live && !!opt.test(proposal);
+                // Right side only ever shows the live ← arrow when the
+                // current number activates this option, regardless of any
+                // past verdict. Past verdicts (✓/✗) live in the LEFT marker,
+                // which is set in renderVerifiers and not touched on ticks.
+                const ok = !!opt.test(proposal);
                 if (ok) {
                     node.className = 'preview pass';
                     node.innerHTML = PREVIEW_ARROW_SVG;
@@ -441,34 +438,42 @@ class UI {
                         'data-ci': ci, 'data-d': v,
                         title: 'Click: cross out · Right-click / long-press: mark candidate',
                     }, String(v));
-                    cell.addEventListener('click', () => onToggleOff(ci, v));
+                    // One-shot flag: the long-press timer sets it true, and
+                    // the trailing synthetic `click` (which the browser fires
+                    // after touchend regardless of preventDefault) reads it,
+                    // resets it, and bails. Without this, every long-press
+                    // would also toggle the cross-out and the candidate ring
+                    // would visually disappear under the X.
+                    let suppressClick = false;
+                    let pressTimer = null;
+                    const cancel = () => { clearTimeout(pressTimer); pressTimer = null; };
+
+                    cell.addEventListener('click', () => {
+                        if (suppressClick) { suppressClick = false; return; }
+                        onToggleOff(ci, v);
+                    });
                     cell.addEventListener('contextmenu', (e) => {
                         e.preventDefault();
                         onToggleCandidate(ci, v);
                     });
-                    // Long-press for touch devices: ~500 ms hold fires the
-                    // candidate toggle and suppresses the trailing click.
-                    let pressTimer = null;
-                    let longFired  = false;
-                    const cancel = () => { clearTimeout(pressTimer); pressTimer = null; };
                     cell.addEventListener('touchstart', () => {
-                        longFired = false;
                         cancel();
                         pressTimer = setTimeout(() => {
-                            longFired = true;
+                            suppressClick = true;
                             try { if (navigator.vibrate) navigator.vibrate(30); } catch (_) {}
-                            // Some browsers select the cell text the moment
-                            // the long-press fires; clear it so the cell
-                            // doesn't end up looking selected.
+                            // Clear any stray text selection the OS may have
+                            // started before our handler ran.
                             try { window.getSelection && window.getSelection().removeAllRanges(); }
                             catch (_) { /* ignore */ }
                             onToggleCandidate(ci, v);
                         }, 500);
                     }, { passive: true });
                     cell.addEventListener('touchmove', cancel, { passive: true });
-                    cell.addEventListener('touchend', (e) => {
+                    cell.addEventListener('touchcancel', cancel);
+                    cell.addEventListener('touchend', () => {
+                        // Short tap → cancel pending long-press; the click
+                        // event fires next and runs onToggleOff normally.
                         if (pressTimer) cancel();
-                        if (longFired) { e.preventDefault(); longFired = false; }
                     });
                     return cell;
                 })
@@ -603,6 +608,104 @@ class UI {
                 : `You gave up after ${roundsPlayed} round${roundsPlayed===1?'':'s'} and ${queriesAsked} question${queriesAsked===1?'':'s'}. The code was ${puzzle.solution.join('-')}.`);
         $('#end-stats').textContent = stats;
 
+        // Expected average + ranking — only shown on a win. The expected
+        // values come straight from the same formula the custom-level
+        // modal uses (info-theoretic minimum bits divided by qpr, scaled
+        // ~1.4× for typical-play slack), so the player can compare their
+        // run against what an averagely-skilled player would take.
+        const rankBox    = $('#end-ranking');
+        const expectBox  = $('#end-expected');
+        if (won) {
+            const v = puzzle.cards.length;
+            const qpr = (puzzle.config && puzzle.config.questionsPerRound)
+                || GAME_CONFIG.questionsPerRound;
+
+            const optsPerCard = puzzle.cards.map(c => CARDS_BY_ID[c.id].options.length);
+            const bits         = optsPerCard.reduce((s, n) => s + Math.log2(n), 0);
+            const minQueries   = Math.max(1, Math.ceil(bits));
+            const expQuestions = Math.max(minQueries, Math.ceil(bits * 1.4));
+            const minRounds    = Math.max(1, Math.ceil(minQueries / qpr));
+            const expRounds    = Math.max(minRounds, Math.ceil(expQuestions / qpr));
+            // Collapse "3–3" to "3" when min and max agree (and pick the right
+            // singular/plural form). Questions are always shown as a range —
+            // for any solvable puzzle minQueries < expQuestions, so a one-
+            // value collapse there would be dead-code.
+            const rRange = minRounds === expRounds
+                ? `${minRounds}` : `${minRounds}–${expRounds}`;
+            const rUnit  = expRounds === 1 ? 'round' : 'rounds';
+            $('#end-expected-vals').textContent =
+                `${rRange} ${rUnit} · ${minQueries}–${expQuestions} questions`;
+            expectBox.hidden = false;
+
+            const r = classifyWin(v, roundsPlayed, queriesAsked, qpr);
+            rankBox.className = 'end-ranking tier-' + r.index;
+            // Five regular tiers + one Special (Lucky). The badge spells out
+            // "Special" for Lucky Gambler so the user doesn't read it as
+            // "Rank 6 / 6", which would imply it's the worst regular tier.
+            $('#end-rank-badge').textContent  = r.lucky
+                ? 'Special'
+                : `Rank ${r.index + 1} / ${WIN_TIERS.length - 1}`;
+            $('#end-rank-title').textContent  = r.title;
+            $('#end-rank-flavor').textContent = r.flavor;
+
+            // Score breakdown — each metric on its own line with a hint that
+            // explains direction. Pacing/efficiency are written as "factor
+            // N.NN× of minimum" so the number reads as a multiplier of the
+            // ideal. For Lucky Gambler we skip the breakdown — the combined
+            // formula doesn't really apply and the headline already says it.
+            const scoreBox = $('#end-rank-score');
+            scoreBox.innerHTML = '';
+            if (r.lucky) {
+                // Plain "X / Y" so the line works regardless of singular vs
+                // plural, and the wording (Q questions per V verifiers) stays
+                // readable when either count is 1.
+                scoreBox.appendChild(el('div', { class: 'score-combined' },
+                    el('strong', {}, `Questions asked: ${queriesAsked} / ${v}`),
+                    ' ',
+                    el('span', { class: 'score-hint' },
+                        '(less than one question per verifier — not enough information to deduce the code)')));
+            } else {
+                scoreBox.appendChild(el('div', {},
+                    `Efficiency: factor ${r.efficiency.toFixed(2)}× `,
+                    el('span', { class: 'score-hint' },
+                        `(1.00× = ideal (1 question per verifier), higher = more queries)`)));
+                scoreBox.appendChild(el('div', {},
+                    `Pacing: factor ${r.pacing.toFixed(2)}× `,
+                    el('span', { class: 'score-hint' },
+                        `(compared to the absolute minimum rounds possible at all (${r.minRounds}); 1.00× = ideal, higher = slower)`)));
+                scoreBox.appendChild(el('div', { class: 'score-combined' },
+                    el('strong', {}, `Combined score: ${r.score.toFixed(2)}`),
+                    ' ',
+                    el('span', { class: 'score-hint' },
+                        '(average of the two; lower is better)')));
+            }
+
+            const ladder = $('#end-rank-ladder');
+            ladder.innerHTML = '';
+            WIN_TIERS.forEach((tier, i) => {
+                const threshold = tier.lucky
+                    ? 'questions < verifiers'
+                    : (i === LUCKY_INDEX - 1
+                        ? 'anything worse'
+                        : `score ≤ ${tier.max.toFixed(2)}`);
+                const li = el('li', {
+                    class: 'rank-rung tier-' + i
+                         + (i === r.index ? ' current' : '')
+                         + (tier.lucky ? ' lucky' : ''),
+                    title: tier.flavor,
+                },
+                    el('span', { class: 'rung-num' }, tier.lucky ? '★' : String(i + 1)),
+                    el('span', { class: 'rung-title' }, tier.title),
+                    el('span', { class: 'rung-threshold' }, threshold),
+                );
+                ladder.appendChild(li);
+            });
+            rankBox.hidden = false;
+        } else {
+            rankBox.hidden = true;
+            expectBox.hidden = true;
+        }
+
         const row = $('#end-solution-row');
         row.innerHTML = '';
         GAME_CONFIG.colors.forEach((c, i) => {
@@ -645,6 +748,41 @@ class UI {
 }
 
 // --- helpers ---------------------------------------------------------------
+// Five tongue-in-cheek tiers, in descending quality. The tier index doubles
+// as a CSS modifier (`tier-0` … `tier-4`) so we can paint each rank in its
+// own colour. `max` is the upper bound on the combined score below.
+// `Lucky Gambler` (`tier-5`) is a special tier outside the score scale —
+// triggered when the player wins without asking enough questions to have
+// actually deduced the code.
+const WIN_TIERS = [
+    { title: "Turing's Heir",        flavor: "One question per rule, no wasted rounds. The machine bows.",            max: 1.10 },
+    { title: 'Sharp Cryptanalyst',   flavor: 'Tight queries, brisk pacing — Alan would approve.',                     max: 1.75 },
+    { title: 'Methodical Detective', flavor: 'Slow and steady cracked the code.',                                     max: 2.75 },
+    { title: 'Stubborn Codebreaker', flavor: 'It took a while, but you wore the puzzle down.',                        max: 4.50 },
+    { title: 'Brute-Force Champion', flavor: 'When deduction fails, persistence wins. Kind of.',                      max: Infinity },
+    { title: 'Lucky Gambler',        flavor: 'You guessed the code before the verifiers could even tell you much. The dice gods smile on you today.', lucky: true },
+];
+const LUCKY_INDEX = WIN_TIERS.length - 1;
+
+// Pick a tier for a winning game.
+//   • efficiency  = questions / verifiers           (1.0 = one query per rule)
+//   • pacing      = rounds    / ceil(V / qpr)       (1.0 = no wasted rounds)
+// If the player asked fewer questions than there are verifiers they can't
+// have actually deduced the criteria — that's the Lucky Gambler tier,
+// independent of the combined score. Otherwise average the two signals and
+// bucket into one of the five regular tiers.
+function classifyWin(verifiers, rounds, questions, qpr) {
+    const eff       = questions / Math.max(1, verifiers);
+    const minRounds = Math.max(1, Math.ceil(verifiers / Math.max(1, qpr)));
+    const pace      = rounds / minRounds;
+    if (questions < verifiers) {
+        return { ...WIN_TIERS[LUCKY_INDEX], index: LUCKY_INDEX, score: NaN, efficiency: eff, pacing: pace, minRounds };
+    }
+    const score = (eff + pace) / 2;
+    const idx   = WIN_TIERS.findIndex(t => !t.lucky && score <= t.max);
+    return { ...WIN_TIERS[idx], index: idx, score, efficiency: eff, pacing: pace, minRounds };
+}
+
 // Inline SVG arrow used as the "active option" preview marker on verifier
 // cards. Pointing left so it visually reads as "← this rule fits the number".
 const PREVIEW_ARROW_SVG =
