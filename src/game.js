@@ -584,10 +584,12 @@ class Game {
 
     // ---------- one-time wiring ----------
     wireGlobalUI() {
-        $('#btn-back').onclick = () => {
+        const goBack = () => {
             this.ui.showScreen('main');
             this.refreshMainMenu();
         };
+        $('#btn-back').onclick = goBack;
+        this.ui.setOnBackToMain(goBack);
         $('#btn-info').onclick = () => this.ui.openModal('rules-modal');
         $('#btn-close-rules').onclick = () => this.ui.closeModal('rules-modal');
 

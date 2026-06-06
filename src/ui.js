@@ -31,6 +31,38 @@ class UI {
             end:   $('#screen-end'),
         };
         this.toastTimer = null;
+
+        // Phone-back integration. We mirror two app states into the browser
+        // history stack: (1) "on a non-main screen" pushes one entry; (2) each
+        // open modal pushes one entry on top. A `popstate` then unwinds the
+        // matching app-state, so the phone back button closes the topmost
+        // modal first, then leaves a non-main screen back to the menu.
+        this._modalStack = [];
+        this._navDepth = 0;
+        this._suppressNextPop = false;
+        this._skipNextScreenRewind = false;
+        this._currentScreen = null;
+        this._onBackToMain = null;
+        window.addEventListener('popstate', () => this._onPopState());
+    }
+
+    setOnBackToMain(fn) { this._onBackToMain = fn; }
+
+    _onPopState() {
+        if (this._suppressNextPop) { this._suppressNextPop = false; return; }
+        // Browser already popped one entry — mirror that locally.
+        if (this._navDepth > 0) this._navDepth--;
+        if (this._modalStack.length) {
+            const id = this._modalStack.pop();
+            $('#' + id).classList.add('hidden');
+            return;
+        }
+        if (this._currentScreen && this._currentScreen !== 'main') {
+            // History is already aligned; skip showScreen's rewind logic.
+            this._skipNextScreenRewind = true;
+            /* istanbul ignore else -- game.js always installs the handler */
+            if (this._onBackToMain) this._onBackToMain();
+        }
     }
 
     showScreen(name) {
@@ -40,10 +72,58 @@ class UI {
         // Topbar buttons relevance
         $('#btn-back').hidden  = (name === 'main');
         $('#btn-share').hidden = (name !== 'game' && name !== 'end');
+
+        const prev = this._currentScreen;
+        if (name === 'main' && prev && prev !== 'main') {
+            // Returning to main — close any open modals and unwind history.
+            while (this._modalStack.length) {
+                const id = this._modalStack.pop();
+                $('#' + id).classList.add('hidden');
+            }
+            if (this._skipNextScreenRewind) {
+                this._skipNextScreenRewind = false;
+            } else /* istanbul ignore else -- navDepth is always ≥1 when leaving a non-main screen */ if (this._navDepth > 0) {
+                const n = this._navDepth;
+                this._navDepth = 0;
+                this._suppressNextPop = true;
+                history.go(-n);
+            }
+        } else if (name !== 'main' && (!prev || prev === 'main')) {
+            // Leaving main — register a single "back-to-main" history entry.
+            this._navDepth++;
+            history.pushState({ tm_nav: this._navDepth }, '');
+        }
+        this._currentScreen = name;
     }
 
-    openModal(id)  { $('#' + id).classList.remove('hidden'); }
-    closeModal(id) { $('#' + id).classList.add('hidden'); }
+    openModal(id)  {
+        const node = $('#' + id);
+        /* istanbul ignore if -- defensive against double-open; no caller does this today */
+        if (this._modalStack.includes(id)) return;
+        node.classList.remove('hidden');
+        this._modalStack.push(id);
+        this._navDepth++;
+        history.pushState({ tm_nav: this._navDepth }, '');
+    }
+    closeModal(id) {
+        const node = $('#' + id);
+        const idx = this._modalStack.indexOf(id);
+        node.classList.add('hidden');
+        /* istanbul ignore if -- defensive: closing an already-closed modal is a no-op for history */
+        if (idx === -1) return;
+        // Pop this modal and anything stacked above it from both lists. Today
+        // no caller stacks modals, but the loop keeps history consistent if
+        // one ever does.
+        const pops = this._modalStack.length - idx;
+        for (let k = 0; k < pops; k++) {
+            const otherId = this._modalStack.pop();
+            /* istanbul ignore if -- only fires for stacked modals, which no caller creates today */
+            if (otherId !== id) $('#' + otherId).classList.add('hidden');
+        }
+        this._navDepth -= pops;
+        this._suppressNextPop = true;
+        history.go(-pops);
+    }
 
     toast(msg) {
         const t = $('#toast');

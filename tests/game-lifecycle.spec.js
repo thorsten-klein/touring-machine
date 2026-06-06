@@ -161,6 +161,36 @@ test('btn-back from game returns to main menu', async ({ page }) => {
     await expect(page.locator('#screen-main')).toBeVisible();
 });
 
+test('phone back: closes open modal, then exits non-main screen', async ({ page }) => {
+    await page.goto('');
+    // From main → level screen (pushes one history entry).
+    await page.click('#btn-start-game');
+    await expect(page.locator('#screen-level')).toBeVisible();
+    // Phone back → returns to main (covers _onPopState's back-to-main branch
+    // and showScreen's _skipNextScreenRewind reset).
+    await page.goBack();
+    await expect(page.locator('#screen-main')).toBeVisible();
+
+    // Open a modal from main, then phone-back closes it.
+    await page.click('#btn-info');
+    await expect(page.locator('#rules-modal')).toBeVisible();
+    await page.goBack();
+    await expect(page.locator('#rules-modal')).toBeHidden();
+});
+
+test('in-app back closes any open modal while leaving non-main', async ({ page }) => {
+    await page.goto('');
+    await startEasyGame(page, 10);
+    // Open the rules modal on top of the game screen.
+    await page.click('#btn-info');
+    await expect(page.locator('#rules-modal')).toBeVisible();
+    // Topbar back: covers showScreen's modal-cleanup loop and history rewind.
+    // The visible modal intercepts pointer events, so trigger the click directly.
+    await page.evaluate(() => document.getElementById('btn-back').click());
+    await expect(page.locator('#screen-main')).toBeVisible();
+    await expect(page.locator('#rules-modal')).toBeHidden();
+});
+
 test('btn-share with no active state is a no-op', async ({ page }) => {
     await page.goto('');
     await page.evaluate(() => document.getElementById('btn-share').click());
