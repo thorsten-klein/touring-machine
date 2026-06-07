@@ -132,21 +132,11 @@ test('extreme: attachDecoys returns false when no different-family decoy exists'
     expect(got).toBe(false);
 });
 
-test('hardplus opts with too few verifiers fails the ≥3 colorParam gate', async ({ page }) => {
-    await page.goto('');
-    const r = await page.evaluate(() => {
-        // 2 verifiers + hardplus → head pins at most 2 colorParam cards →
-        // the ≥3 gate never passes → generation exhausts budget → null.
-        return generatePuzzle('EASY', 999, { hardplus: true, verifiers: 2, maxAttempts: 200 });
-    });
-    expect(r).toBeNull();
-});
-
 test('hardplus + extreme opts.* override LEVELS-derived flags', async ({ page }) => {
     await page.goto('');
     await page.evaluate(() => {
         // opts.hardplus explicitly true on EASY (which has no hardplus flag)
-        // turns on the colorParam-bias card ordering. Puzzle still generates;
+        // switches to the Hard mystery-verifier pool. Puzzle still generates;
         // its config.hardplus rides the explicit opts override.
         const p = generatePuzzle('EASY', 222, { hardplus: true });
         if (!p) throw new Error('opts.hardplus generate null');
@@ -159,22 +149,37 @@ test('hardplus + extreme opts.* override LEVELS-derived flags', async ({ page })
     });
 });
 
-test('hardplus: puzzle generates, biases toward colorParam, codec round-trips', async ({ page }) => {
+test('hard: puzzle generates using only mystery verifiers, codec round-trips (H prefix)', async ({ page }) => {
     await page.goto('');
     await page.evaluate(() => {
-        const p = generatePuzzle('HARDPLUS', 500);
-        if (!p) throw new Error('hardplus generate null');
+        const p = generatePuzzle('HARD', 500);
+        if (!p) throw new Error('hard generate null');
         if (!p.config.hardplus) throw new Error('hardplus config flag missing');
-        // Hard+ uses the full pool but biases towards colorParam cards by
-        // shuffling them to the front. We assert AT LEAST one colorParam
-        // card is present — the exact mix varies seed-to-seed.
-        const cpCount = p.cards.filter(c => CARDS_BY_ID[c.id].colorParam).length;
-        if (cpCount < 3) throw new Error('hardplus puzzle has fewer than 3 colorParam cards: ' + cpCount);
+        // Every Hard verifier is a mystery card — combo (hardplusOnly) or colorParam.
+        if (!p.cards.every(c => {
+            const def = CARDS_BY_ID[c.id];
+            return def.hardplusOnly || def.colorParam;
+        })) throw new Error('hard puzzle has a non-mystery verifier');
         const id = encodeGameId(p);
-        if (!id.startsWith('P')) throw new Error('hardplus id should start with P');
+        if (!id.startsWith('H')) throw new Error('hard id should start with H');
         const back = decodeGameId(id);
-        if (back.level !== 'HARDPLUS') throw new Error('decode preserves level');
+        if (back.level !== 'HARD') throw new Error('decode preserves level');
         if (!back.config.hardplus) throw new Error('decoded config.hardplus is false');
+    });
+});
+
+test('legacy game-id prefixes decode to current levels (E/M → Classic, P → Hard)', async ({ page }) => {
+    await page.goto('');
+    await page.evaluate(() => {
+        // Forge minimal legacy IDs from real preset puzzles and re-prefix.
+        const easyP = generatePuzzle('EASY', 1);
+        const easyId = encodeGameId(easyP).replace(/^./, 'E');
+        const e = decodeGameId(easyId);
+        if (e.level !== 'CLASSIC') throw new Error('E should decode to CLASSIC, got ' + e.level);
+        const medId = encodeGameId(generatePuzzle('MEDIUM', 2)).replace(/^./, 'M');
+        if (decodeGameId(medId).level !== 'CLASSIC') throw new Error('M should decode to CLASSIC');
+        const oldHardplusId = encodeGameId(generatePuzzle('HARD', 3)).replace(/^./, 'P');
+        if (decodeGameId(oldHardplusId).level !== 'HARD') throw new Error('P should decode to HARD');
     });
 });
 

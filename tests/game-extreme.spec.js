@@ -266,33 +266,45 @@ test('extreme end screen lists both active criterion and decoy', async ({ page }
 });
 
 test('extreme ask gating counts across both panes', async ({ page }) => {
-    await startExtremePreset(page, 71);
-    // Find a proposal where ≥2 options match across both panes for verifier 0
-    // → Ask should be disabled.
-    const has = await page.evaluate(() => {
-        const p = window.game.state.puzzle;
-        const panes = paneListOf(p.cards[0]);
-        const allOpts = panes.flatMap(pane => CARDS_BY_ID[pane.id].options);
+    // colorParam panes intentionally bypass the 1-● gate. Hand-roll a
+    // synthetic extreme puzzle whose only verifier uses TWO non-colorParam
+    // cards (cards 8/9 = "How many 1s" / "How many 3s", both 3-option
+    // count-of-digit cards after admissibility pruning). Set a proposal
+    // matching one option on each pane → 2 ●s total → Ask must be greyed.
+    await page.goto('');
+    await page.evaluate(() => {
+        const puzzle = {
+            level: 'EXTREME',
+            cards: [{ id: 8, opt: 0, altId: 9, altOpt: 0, swap: false }],
+            config: { digitMin: 1, digitMax: 5, verifiers: 1, questionsPerRound: 3, extreme: true },
+            solution: [2, 2, 2],
+        };
+        window.game.startWithPuzzle(puzzle);
+        // [2, 2, 2] has zero 1s AND zero 3s → matches both pane-0 opt-0
+        // and pane-1 opt-0 → 2 ●s across both panes.
+        window.game.state.proposal = [2, 2, 2];
+        window.game.renderAll();
+    });
+    const disabled = await page.locator('.verifier-card[data-vidx="0"] .vbtn').isDisabled();
+    expect(disabled).toBe(true);
+    // Now move to a proposal with exactly 1 ● — e.g. [1, 2, 2] has one 1 and
+    // zero 3s → 1+1 = 2 still. Use [5, 5, 5]: zero 1s, zero 3s → 2 ●s.
+    // Find a 1-● proposal explicitly:
+    await page.evaluate(() => {
+        const allOpts = paneListOf(window.game.state.puzzle.cards[0])
+            .flatMap(p => CARDS_BY_ID[p.id].options);
         for (let a = 1; a <= 5; a++)
         for (let b = 1; b <= 5; b++)
         for (let c = 1; c <= 5; c++) {
             const n = allOpts.filter(o => o.test([a, b, c])).length;
-            if (n >= 2) {
+            if (n === 1) {
                 window.game.state.proposal = [a, b, c];
                 window.game.renderAll();
-                return true;
+                return;
             }
         }
-        return false;
     });
-    if (!has) test.skip();
-    const disabled = await page.locator('.verifier-card[data-vidx="0"] .vbtn').isDisabled();
-    expect(disabled).toBe(true);
-    // Now make it askable (1 ●).
-    const ok = await makeAskable(page, 0);
-    if (ok) {
-        await expect(page.locator('.verifier-card[data-vidx="0"] .vbtn')).toBeEnabled();
-    }
+    await expect(page.locator('.verifier-card[data-vidx="0"] .vbtn')).toBeEnabled();
 });
 
 test('extreme deduction modal: pane-dead status branch + pane-tag in subtitle', async ({ page }) => {

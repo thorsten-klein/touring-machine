@@ -13,13 +13,34 @@
 //      "no verifier is superfluous")
 //   3. No two verifiers share the same card family — keeps puzzles varied.
 
-const VERIFIER_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F'];
+// Verifier label by index. Backed by a function so we never run out of
+// letters — CLASSIC's stepper goes up to 7, EXTREME adds a 6th
+// red-herring slot, CUSTOM ranges up to 99, and the old fixed array
+// silently rendered `undefined` (empty .vletter) past the cap. After 'Z'
+// we wrap to 'AA', 'AB', … in the spreadsheet style.
+function verifierLetter(idx) {
+    if (idx < 26) return String.fromCharCode(65 + idx);
+    const high = Math.floor(idx / 26) - 1;
+    const low  = idx % 26;
+    return String.fromCharCode(65 + high) + String.fromCharCode(65 + low);
+}
 
-// Hard+: minimum number of color-parameterized verifiers per puzzle. The
-// remaining slots come from the full pool. Tuned so that a 6-verifier Hard+
-// game always has a solid color-deduction core without over-constraining
-// (all-colorParam puzzles often have no solution within the budget).
-const HARDPLUS_MIN_COLOR_VERIFIERS = 3;
+// Returns the verifier cards the level-info modal lists for the given level.
+//   • Hard: only the colorParam "mystery" cards — the combos are described
+//     in the subtitle so the list stays manageable.
+//   • Everything else: the full Classic source pool (non-hardplusOnly).
+function availableCardsForLevel(level) {
+    if (level === 'HARD' || (LEVELS[level] && LEVELS[level].hardplus)) {
+        return CARDS.filter(c => c.colorParam);
+    }
+    return CARDS.filter(c => !c.hardplusOnly);
+}
+
+// Count of Classic source cards (non-hardplusOnly, non-colorParam) used as
+// the building blocks for Hard's OR-combo verifier slots.
+function classicSourceCount() {
+    return CARDS.filter(c => !c.hardplusOnly && !c.colorParam).length;
+}
 
 // Returns the [paneA, paneB] (or [paneA]) view of a verifier card. paneA is
 // always at display index 0 and paneB at index 1; the `swap` flag on extreme
@@ -63,8 +84,13 @@ function shuffle(rng, arr) {
 }
 
 // --- core puzzle helpers ---
+// Red-herring slots (Extreme only) carry `redHerring: true`; their active
+// criterion does NOT constrain the solution — they're decoys at the slot
+// level, not just the pane level. Solution-counting filters them out.
 function solutionsFor(puzzle) {
-    const tests = puzzle.cards.map(({id, opt}) => CARDS_BY_ID[id].options[opt].test);
+    const tests = puzzle.cards
+        .filter(c => !c.redHerring)
+        .map(({id, opt}) => CARDS_BY_ID[id].options[opt].test);
     return ALL_CODES.filter(code => tests.every(t => t(code)));
 }
 
@@ -72,7 +98,9 @@ function solutionsFor(puzzle) {
 // only need to know "exactly 1" or "≤ 1", so enumerating the full code
 // space when the second match has already shown up is pure waste.
 function solutionCountUpTo(puzzle, cap) {
-    const tests = puzzle.cards.map(({id, opt}) => CARDS_BY_ID[id].options[opt].test);
+    const tests = puzzle.cards
+        .filter(c => !c.redHerring)
+        .map(({id, opt}) => CARDS_BY_ID[id].options[opt].test);
     let c = 0;
     for (const code of ALL_CODES) {
         if (tests.every(t => t(code))) {
@@ -109,8 +137,10 @@ function isValidPuzzle(puzzle) {
 
     // Every verifier must be essential: drop it → >1 solution must remain.
     // We only care whether the count exceeds 1; solutionCountUpTo bails as
-    // soon as the second hit shows up.
+    // soon as the second hit shows up. Red-herring cards don't constrain
+    // the solution at all so dropping one is a no-op — skip them.
     for (let i = 0; i < puzzle.cards.length; i++) {
+        if (puzzle.cards[i].redHerring) continue;
         const dropped = { cards: puzzle.cards.filter((_, j) => j !== i) };
         if (solutionCountUpTo(dropped, 1) === 1) return false;
     }
@@ -120,13 +150,16 @@ function isValidPuzzle(puzzle) {
     // a multiple of 3" and "…of 4" both true when sum=12) would let the
     // player query with the solution itself and not know which option fits.
     //
-    // EXCEPTION: multiOption cards (Hard+ OR-combo cards) are designed so
-    // most proposals match multiple options. The puzzle is still uniquely
-    // solvable on the SOLUTION CODE; the player just can't reverse-engineer
-    // which specific option was the criterion, which is the point. Skip
-    // the check for those.
-    for (const { id } of puzzle.cards) {
-        const def = CARDS_BY_ID[id];
+    // EXCEPTIONS:
+    //   • multiOption cards (Hard OR-combo cards) are designed so most
+    //     proposals match multiple options. The puzzle is still uniquely
+    //     solvable on the solution code; the player just can't
+    //     reverse-engineer which specific option was the criterion.
+    //   • redHerring slots aren't constraints — their criterion is chosen
+    //     to NOT match the solution, so this check would always fail.
+    for (const card of puzzle.cards) {
+        if (card.redHerring) continue;
+        const def = CARDS_BY_ID[card.id];
         if (def.multiOption) continue;
         let pass = 0;
         for (const opt of def.options) if (opt.test(solution)) pass++;
@@ -145,14 +178,22 @@ function isValidPuzzle(puzzle) {
 // colors) needs only a config tweak. The CUSTOM level carries no fixed
 // verifier count — it's filled in per-puzzle.
 const LEVELS = {
-    EASY:    { id:'EASY',    label:'Easy',    verifiers:Math.min(4, GAME_CONFIG.maxVerifiers), description:'4 verifiers · perfect for a first game' },
-    MEDIUM:  { id:'MEDIUM',  label:'Medium',  verifiers:Math.min(5, GAME_CONFIG.maxVerifiers), description:'5 verifiers · the standard challenge' },
-    HARD:    { id:'HARD',    label:'Hard',    verifiers:Math.min(6, GAME_CONFIG.maxVerifiers), description:'6 verifiers · for experienced sleuths' },
-    HARDPLUS:{ id:'HARDPLUS',label:'Hard+',   verifiers:Math.min(5, GAME_CONFIG.maxVerifiers), hardplus:true,
-               description:'5 verifiers · ≥3 "which color does X?" rules + OR-combo cards from easier levels' },
+    // Classic carries no fixed verifier count: the player picks the count
+    // via a stepper on the level-select screen, which gets passed through
+    // generatePuzzle's opts.verifiers.
+    CLASSIC: { id:'CLASSIC', label:'Classic', verifiers:5,
+               description:'The standard rule pool — pick how many verifiers you want above' },
+    HARD:    { id:'HARD',    label:'Hard',    verifiers:Math.min(5, GAME_CONFIG.maxVerifiers), hardplus:true,
+               description:'5 verifiers · ≥3 "which color does X?" rules + OR-combo cards' },
     EXTREME: { id:'EXTREME', label:'Extreme', verifiers:Math.min(5, GAME_CONFIG.maxVerifiers), extreme:true,
-               description:'5 verifiers · each shows TWO cards — only one is real' },
-    CUSTOM:  { id:'CUSTOM',  label:'Custom level', verifiers:0,             description:'Pick your own digit range and verifier count' },
+               description:'5 real verifiers (each shows TWO cards, only one is real) PLUS a 6th red-herring verifier' },
+    CUSTOM:  { id:'CUSTOM',  label:'Custom level', verifiers:0,
+               description:'Pick your own digit range and verifier count' },
+    // Legacy entries kept so old game IDs and existing tests keep working.
+    // _legacy:true is the filter main.js uses to hide them on level select.
+    EASY:     { id:'EASY',     label:'Classic', verifiers:4, _legacy:true },
+    MEDIUM:   { id:'MEDIUM',   label:'Classic', verifiers:5, _legacy:true },
+    HARDPLUS: { id:'HARDPLUS', label:'Hard',    verifiers:Math.min(5, GAME_CONFIG.maxVerifiers), hardplus:true, _legacy:true },
 };
 
 // --- generate a puzzle for a given level, optionally from a seed -----------
@@ -204,22 +245,20 @@ function generatePuzzle(level, seed, opts = {}) {
         attempt++;
         let shuffled;
         if (hardplus) {
-            // Pin 3 colorParam cards to the front so the family-distinct
-            // greedy loop picks at least 3 colorParam verifiers; the rest
-            // are sampled randomly from the FULL pool (including the
-            // remaining colorParam cards AND the Hard+-only OR-combo
-            // cards). This is the only reliable way to satisfy the ≥3
-            // colorParam requirement within budget — a plain random shuffle
-            // of the full pool rarely lands ≥3.
-            const cp     = shuffle(rng, CARDS.filter(c => c.colorParam));
-            const others = shuffle(rng, CARDS.filter(c => !c.colorParam));
-            const head   = cp.slice(0, HARDPLUS_MIN_COLOR_VERIFIERS);
-            const tail   = shuffle(rng, [...cp.slice(HARDPLUS_MIN_COLOR_VERIFIERS), ...others]);
-            shuffled     = [...head, ...tail];
+            // Hard: pool consists of every "mystery" verifier. That's the
+            // synthesised OR-combos (you don't know which of the 2 source
+            // rules was answered) PLUS the colorParam cards (you don't
+            // know which color is the criterion). Both have the property
+            // that a YES/NO verdict alone doesn't pin a single option, so
+            // they fit Hard's "the verdict tells you less" theme. Each
+            // combo's family is `combo_<srcA>_<srcB>` so family-uniqueness
+            // already prevents the same source pair appearing twice; sources
+            // CAN appear in multiple combos at different slots, which is
+            // intentional — that's the bluff.
+            shuffled = shuffle(rng, CARDS.filter(c => c.hardplusOnly || c.colorParam));
         } else {
-            // Non-Hard+ pools exclude the Hard+ OR-combo cards (those have
-            // multiOption semantics that the standard 1-● Ask rule can't
-            // accommodate elsewhere).
+            // Non-Hard pools exclude the combo cards (their multiOption
+            // semantics don't fit the standard 1-● Ask rule).
             shuffled = shuffle(rng, CARDS.filter(c => !c.hardplusOnly));
         }
         const chosen = [];
@@ -254,16 +293,6 @@ function generatePuzzle(level, seed, opts = {}) {
             for (const p of prefs) usedPrefixes.add(p);
         }
         if (chosen.length < verifiers) continue;
-        // Hard+ requires at least HARDPLUS_MIN_COLOR_VERIFIERS colorParam
-        // verifiers so the level genuinely reads as "the color-deduction
-        // one" — random shuffles of the full pool would otherwise often
-        // produce HARD-looking puzzles. The threshold is set below the
-        // total verifier count to leave room for easier-level rules.
-        if (hardplus) {
-            let cpCount = 0;
-            for (const c of chosen) if (CARDS_BY_ID[c.id].colorParam) cpCount++;
-            if (cpCount < HARDPLUS_MIN_COLOR_VERIFIERS) continue;
-        }
         const puzzle = {
             level,
             seed: baseSeed,
@@ -290,9 +319,68 @@ function generatePuzzle(level, seed, opts = {}) {
             if (!ok) continue;
         }
         puzzle.solution = solutionsFor(puzzle)[0];
+        if (extreme) {
+            // Append a single red-herring slot. The herring's active
+            // criterion is deliberately chosen to NOT match the solution,
+            // so the player can tell it apart by asking the solution (the
+            // herring is the verifier that says NO when everything else
+            // says YES). Failure to find a non-family-conflicting herring
+            // rejects the attempt — generation retries with a new seed.
+            const ok = attachRedHerring(puzzle, rng);
+            /* istanbul ignore if -- the Classic pool has tens of cards across many families; failing to find a herring takes a pathological config */
+            if (!ok) continue;
+        }
         return puzzle;
     }
     return null;
+}
+
+// Append a single red-herring slot to an Extreme puzzle. The herring is
+// styled like a normal Extreme slot (two cards, one swap bit) so the
+// player can't tell it apart visually — but its active criterion is
+// chosen to NOT match the actual solution. That makes the herring the
+// one verifier that says NO on a query of the true solution.
+//
+// Returns true on success; false if the pool can't supply a family-distinct
+// herring whose active criterion misses the solution (the caller will
+// retry with a fresh seed).
+function attachRedHerring(puzzle, rng) {
+    const solution = puzzle.solution;
+    const usedFamilies = new Set(puzzle.cards.map(c => CARDS_BY_ID[c.id].family));
+    // Active card pool: non-hardplusOnly, family not yet used, with at
+    // least one option that does NOT match the solution.
+    const activeCands = CARDS.filter(c =>
+        !c.hardplusOnly && !usedFamilies.has(c.family) &&
+        c.options.some(o => !o.test(solution)));
+    if (!activeCands.length) return false;
+    const shuffledActives = shuffle(rng, activeCands);
+    for (const card of shuffledActives) {
+        const okOpts = card.options
+            .map((opt, oi) => ({ oi, opt }))
+            .filter(({ opt }) => !opt.test(solution));
+        if (!okOpts.length) continue;
+        const pick = okOpts[Math.floor(rng() * okOpts.length)];
+        // Decoy for the herring's pair: any card from a different family
+        // than the herring's active card (also not used by a real slot).
+        const decoyCands = CARDS.filter(c =>
+            !c.hardplusOnly &&
+            c.family !== card.family &&
+            c.id !== card.id);
+        /* istanbul ignore if -- with a Classic pool of 30+ families, a decoy from a different family always exists */
+        if (!decoyCands.length) continue;
+        const decoy = decoyCands[Math.floor(rng() * decoyCands.length)];
+        const decoyOpt = Math.floor(rng() * decoy.options.length);
+        puzzle.cards.push({
+            id:    card.id,
+            opt:   pick.oi,
+            altId: decoy.id,
+            altOpt: decoyOpt,
+            swap:  rng() < 0.5,
+            redHerring: true,
+        });
+        return true;
+    }
+    return false;
 }
 
 // For each verifier slot, pick a decoy card with a different family than the
@@ -324,13 +412,29 @@ function attachDecoys(puzzle, rng) {
 // Preset extreme uses level char X. Custom extreme appends the X marker after
 // the optional Q suffix (e.g. "C1_5X_…" or "C1_5Q4X_…").
 // Self-describing and short enough for a URL.
-const LEVEL_CHAR = { EASY:'E', MEDIUM:'M', HARD:'H', HARDPLUS:'P', EXTREME:'X' };
-const CHAR_LEVEL = { E:'EASY',  M:'MEDIUM',  H:'HARD',  P:'HARDPLUS',  X:'EXTREME' };
+// Encoder is canonical: each current level has ONE letter. Legacy LEVELS
+// entries still encode (so tests using generatePuzzle('EASY', …) work)
+// but they collapse onto the modern letter — an EASY puzzle encodes as L
+// and decodes back as CLASSIC. The cards and solution are identical;
+// only the label differs.
+const LEVEL_CHAR = {
+    CLASSIC:'L', HARD:'H', EXTREME:'X',
+    EASY:'L', MEDIUM:'L', HARDPLUS:'H',
+};
+const CHAR_LEVEL = {
+    L:'CLASSIC',  X:'EXTREME',  H:'HARD',
+    // Legacy aliases:
+    E:'CLASSIC',  // old Easy   (4 verifiers)
+    M:'CLASSIC',  // old Medium (5 verifiers)
+    P:'HARD',     // old Hard+  (5 verifiers, hardplus pool)
+};
 
 function encodeGameId(puzzle) {
     const body = puzzle.cards.map(card => {
         if (isExtremeCard(card)) {
-            return `${card.id}.${card.opt}.${card.altId}.${card.altOpt}.${card.swap ? 1 : 0}`;
+            // 6 ints per extreme segment: id.opt.altId.altOpt.swap.herring.
+            const h = card.redHerring ? 1 : 0;
+            return `${card.id}.${card.opt}.${card.altId}.${card.altOpt}.${card.swap ? 1 : 0}.${h}`;
         }
         return `${card.id}.${card.opt}`;
     }).join('-');
@@ -384,7 +488,7 @@ function decodeGameId(id) {
 
     const cards = body.split('-').map(part => {
         const nums = part.split('.').map(Number);
-        if (nums.length !== 2 && nums.length !== 5) {
+        if (nums.length !== 2 && nums.length !== 5 && nums.length !== 6) {
             throw new Error('Malformed verifier segment: ' + part);
         }
         const [cid, oi] = nums;
@@ -394,7 +498,7 @@ function decodeGameId(id) {
             throw new Error('Invalid option index on card ' + cid);
         }
         const out = { id: cid, opt };
-        if (nums.length === 5) {
+        if (nums.length >= 5) {
             const [, , aid, aoi, swap] = nums;
             if (!CARDS_BY_ID[aid]) throw new Error('Unknown decoy card id: ' + aid);
             const aopt = aoi | 0;
@@ -407,6 +511,13 @@ function decodeGameId(id) {
             out.altId = aid;
             out.altOpt = aopt;
             out.swap = swap === 1;
+            if (nums.length === 6) {
+                const h = nums[5];
+                if (h !== 0 && h !== 1) {
+                    throw new Error('Red-herring bit must be 0 or 1');
+                }
+                if (h === 1) out.redHerring = true;
+            }
         }
         return out;
     });

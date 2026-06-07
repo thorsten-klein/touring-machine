@@ -7,16 +7,36 @@ class Game {
     constructor(ui) {
         this.ui = ui;
         this.state = null;
+        // User-toggleable settings (persisted in localStorage across page
+        // reloads via loadSettings/saveSettings in state.js). Loaded once
+        // on construction; the settings modal mutates this object live.
+        this.settings = loadSettings();
         this.wireGlobalUI();
     }
 
     // ---------- session lifecycle ----------
-    startNew(level, seed) {
+    startNew(level, seed, opts = {}) {
         // Preset levels assume the default range + questions/round. Extreme
-        // mode is a per-puzzle flag set by generatePuzzle from LEVELS[level].
+        // and Hard mode are per-puzzle flags derived by generatePuzzle from
+        // LEVELS[level]. opts.verifiers is used only by CLASSIC (the level
+        // select stepper feeds it through).
+        //
+        // Hard (and to a lesser extent Extreme) can come up empty — random
+        // combinations of mystery / extreme cards sometimes don't yield a
+        // unique-solution puzzle within the per-call attempt budget. Retry
+        // with a handful of fresh seeds before giving up, and toast on
+        // total failure instead of silently throwing on null.config.
         reconfigureGame({ digitMin: 1, digitMax: 5 });
         GAME_CONFIG.questionsPerRound = 3;
-        const puzzle = generatePuzzle(level, seed);
+        let puzzle = null;
+        const tries = (seed === undefined) ? 5 : 1;
+        for (let i = 0; i < tries && !puzzle; i++) {
+            puzzle = generatePuzzle(level, seed, opts);
+        }
+        if (!puzzle) {
+            this.ui.toast(`Couldn't build a ${LEVELS[level].label} puzzle this time — please try again.`);
+            return;
+        }
         this.beginWithPuzzle(puzzle);
     }
     startWithPuzzle(puzzle) {
@@ -79,9 +99,10 @@ class Game {
     // only fires after the other pane is confirmed dead. The returned shape
     // has a `panes` array (length 1 for normal, 2 for extreme).
     computeDeductions() {
+        const autoOff = !this.settings.autoDeduce;
         return this.state.puzzle.cards.map((card, vi) => {
             const panes = paneListOf(card);  // [paneA] or [paneA, paneB]
-            const qs    = this.state.queries.filter(q => q.verifierIdx === vi);
+            const qs    = autoOff ? [] : this.state.queries.filter(q => q.verifierIdx === vi);
             const paneDed = panes.map(pane => {
                 const def = CARDS_BY_ID[pane.id];
                 return {
@@ -94,12 +115,20 @@ class Game {
             });
             const isExtreme = panes.length > 1;
 
-            // Walk queries: locate the ● option (when there's exactly one
-            // across all panes/options) and record its verdict against its
-            // pane. For Hard+ colorParam cards the Ask gate allows queries
-            // with 0 or many ●s — in those cases the verdict can't be
-            // pinned to any single option, so we skip per-option marking
-            // and just leave the query as a recorded entry on the verifier.
+            // Walk queries and auto-deduce. Two cases mark:
+            //   • 1-● + ✓   →  matched option IS the criterion (passed)
+            //   • 1-● + ✗   →  matched option is NOT the criterion (crossed)
+            // Both are sound when the card has a single FIXED criterion
+            // (Classic, Extreme, colorParam): the verifier's verdict on the
+            // unique ●-option is decisive.
+            //
+            // EXCEPTION — multiOption (HARD combo) verifiers: from the
+            // player's POV the verifier may "pick one of the options" to
+            // answer; a ✗ on a 1-● proposal doesn't rule the matched
+            // option out (a different option could have been the one
+            // checked). For those, only the 1-● + ✓ case marks. 0-● and
+            // multi-● queries never auto-mark, regardless of card type.
+            const isMulti = panes.some(p => CARDS_BY_ID[p.id].multiOption);
             for (const q of qs) {
                 let hit = null;
                 let hitCount = 0;
@@ -116,7 +145,7 @@ class Game {
                     for (let pi = 0; pi < paneDed.length; pi++) {
                         if (pi !== hit.pi) paneDed[pi].dead = true;
                     }
-                } else {
+                } else if (!isMulti) {
                     paneDed[hit.pi].crossed.add(hit.oi);
                 }
             }
@@ -325,11 +354,46 @@ class Game {
         else if (paneStatus === 'dead')                   status = 'pane-dead';
         else                                              status = 'unknown';
 
+        // Annotate every past query on this verifier with WHY it did or
+        // didn't auto-deduce. Used by the "unknown" branch of the modal
+        // to explain why no marker appeared despite queries being logged.
+        const verifierQueries = qs.map(q => {
+            // Count ●s across BOTH panes (Extreme) so the explanation
+            // matches the actual Ask-gate semantics.
+            let hits = 0;
+            let hitPane = -1, hitOpt = -1;
+            for (let pi = 0; pi < panes.length; pi++) {
+                const pdef = CARDS_BY_ID[panes[pi].id];
+                pdef.options.forEach((o, oi) => {
+                    if (o.test(q.proposal)) { hits++; hitPane = pi; hitOpt = oi; }
+                });
+            }
+            // Why this query didn't (or did) auto-deduce — string keys
+            // matched in the modal renderer.
+            let why = 'unmark';
+            if (hits === 1 && q.result) {
+                // 1-● + TRUE landed; was it on THIS option?
+                why = (hitPane === paneIdx && hitOpt === optionIdx)
+                    ? 'this-confirmed'
+                    : 'other-confirmed';
+            } else if (hits === 1 && !q.result) {
+                why = 'false-1pin';   // 1-● + FALSE — new rule: no mark
+            } else if (hits === 0) {
+                why = 'no-pin';
+            } else {
+                why = 'multi-pin';
+            }
+            return {
+                round: q.round, proposal: q.proposal, result: q.result,
+                hits, why,
+            };
+        });
+
         return {
             verifierIdx,
             paneIdx,
             optionIdx,
-            verifierLetter: VERIFIER_LETTERS[verifierIdx],
+            verifierLetter: verifierLetter(verifierIdx),
             topic: def.topic,
             label: target.label,
             status,
@@ -339,6 +403,8 @@ class Game {
             paneStatus,
             isExtreme,
             otherPaneQueries: isExtreme ? otherPaneCounts(paneIdx) : [],
+            verifierQueries,
+            isMultiOption: !!def.multiOption,
         };
     }
 
@@ -398,22 +464,22 @@ class Game {
         this.ui.renderProposalDials('#proposal-dials', s.proposal, (p) => this.onProposalChange(p),
             { locked: s.isRoundLocked() });
         const deductions = this.computeDeductions();
-        this.ui.renderVerifiers(s.puzzle, deductions, s.queries, (i) => this.onAsk(i), s.proposal);
+        this.ui.renderVerifiers(s.puzzle, deductions, s.queries, (i) => this.onAsk(i), s.proposal, s.userMarkers, !!this.settings.autoDeduce, !!this.settings.showPreviewArrow);
         // Cache deductions so onProposalChange can do a cheap in-place update
         // of the live preview markers without recomputing everything.
         this._lastDeductions = deductions;
         this.refreshAskButtons();
         this.ui.renderNotesTable(s.puzzle, s.queries);
         // End-round button reflects the round state machine:
-        //   - active round, ≥1 query asked  → enabled, "End round →"
+        //   - active round, ≥1 query asked  → enabled, "End round" (stop icon)
         //   - between rounds (pending)      → disabled, "Round ended"
-        //   - active round, 0 queries asked → disabled, "End round →" (nothing to end yet)
+        //   - active round, 0 queries asked → disabled, "End round" (nothing to end yet)
+        // Only the .btn-label text changes; the leading stop icon stays put.
         const endBtn = document.getElementById('btn-end-round');
         if (endBtn) {
             endBtn.disabled = !s.canEndRound();
-            endBtn.textContent = s.pendingNewRound
-                ? "Round ended"
-                : 'End round →';
+            const lbl = endBtn.querySelector('.btn-label');
+            if (lbl) lbl.textContent = s.pendingNewRound ? 'Round ended' : 'End round';
         }
         // Round hint reflects the lazy-advance state.
         const hint = document.getElementById('round-hint');
@@ -454,7 +520,7 @@ class Game {
         // live preview markers on every verifier option.
         this.ui.renderNotesTable(this.state.puzzle, this.state.queries, this.state.round, this.state.proposal);
         if (this._lastDeductions) {
-            this.ui.updateVerifierPreviews(this.state.puzzle, this._lastDeductions, this.state.proposal);
+            this.ui.updateVerifierPreviews(this.state.puzzle, this._lastDeductions, this.state.proposal, !!this.settings.showPreviewArrow);
         }
         // Ask eligibility depends on per-verifier ● count, which moves with
         // the number — recompute.
@@ -478,7 +544,7 @@ class Game {
         if (!this.state.canQueryThisRound()) return;
         const ok = this.state.askVerifier(verifierIdx);
         if (ok === null) return;
-        const letter = VERIFIER_LETTERS[verifierIdx];
+        const letter = verifierLetter(verifierIdx);
         // Auto-end the round once the per-round cap is hit, so the player
         // doesn't have to click End round when there's nothing more they can do.
         const askedThisRound = this.state.queriesInRound(this.state.round);
@@ -762,6 +828,76 @@ class Game {
         };
     }
 
+    // ---------- expected-effort modal ----------
+    // Opened by clicking the level name in the game header. Shows the
+    // same info-theoretic estimates the end screen uses, but BEFORE the
+    // puzzle is solved — so the player can size up the task ahead.
+    openExpectedModal() {
+        if (!this.state) return;
+        const p   = this.state.puzzle;
+        const eff = expectedEffortFor(p);
+        const lv  = LEVELS[p.level] ? LEVELS[p.level].label : p.level;
+        document.getElementById('expected-subtitle').textContent =
+            `${eff.v} verifier${eff.v === 1 ? '' : 's'} · ${eff.qpr} question${eff.qpr === 1 ? '' : 's'} per round · ${lv}`;
+        document.getElementById('expected-min-q').textContent = String(eff.minQuestions);
+        document.getElementById('expected-exp-q').textContent = String(eff.expQuestions);
+        document.getElementById('expected-min-r').textContent =
+            `${eff.minRounds} round${eff.minRounds === 1 ? '' : 's'}`;
+        document.getElementById('expected-exp-r').textContent =
+            `${eff.expRounds} round${eff.expRounds === 1 ? '' : 's'}`;
+        document.getElementById('expected-formula').textContent =
+            `Information-theoretic floor: log₂(options per card) summed across all verifiers ≈ ${eff.bits.toFixed(1)} bits.`;
+        this.ui.openModal('expected-modal');
+    }
+
+    // ---------- settings modal ----------
+    // Reads the current settings into the modal controls, opens it, and
+    // wires each control to persist on change. Settings live in
+    // localStorage (see loadSettings/saveSettings in state.js) so they
+    // survive page reloads, restarts, and switches between games.
+    openSettingsModal() {
+        const autoCb = document.getElementById('set-auto-deduce');
+        autoCb.checked = !!this.settings.autoDeduce;
+        autoCb.onchange = () => {
+            this.settings.autoDeduce = !!autoCb.checked;
+            saveSettings(this.settings);
+            if (this.state) this.renderAll();
+        };
+        const arrowCb = document.getElementById('set-preview-arrow');
+        arrowCb.checked = !!this.settings.showPreviewArrow;
+        arrowCb.onchange = () => {
+            this.settings.showPreviewArrow = !!arrowCb.checked;
+            saveSettings(this.settings);
+            if (this.state) this.renderAll();
+        };
+        this.ui.openModal('settings-modal');
+    }
+
+    // ---------- level-info modal ----------
+    // Opened from the magnifier icon on each level option. Every level
+    // shares the same Classic source pool — Hard's combine-two-into-one
+    // and Extreme's two-cards-per-slot mechanics still use these
+    // building blocks. The subtitle explains the level-specific twist.
+    openLevelInfo(levelId) {
+        // Make sure the listing reflects the default range — the puzzle
+        // generator for presets resets to digits 1..5 before generating,
+        // so the modal should too. For Custom we keep whatever range is
+        // already active and call it out in the subtitle.
+        if (levelId !== 'CUSTOM') {
+            reconfigureGame({ digitMin: 1, digitMax: 5 });
+        }
+        const cards = availableCardsForLevel(levelId);
+        const lv    = LEVELS[levelId];
+        const subtitle = subtitleForLevel(levelId, cards.length);
+        this.ui.renderLevelInfoModal({
+            levelLabel: lv.label,
+            subtitle,
+            cards,
+        });
+        document.getElementById('btn-close-level-info').onclick =
+            () => this.ui.closeModal('level-info-modal');
+    }
+
     // ---------- shared puzzle flow ----------
     startSharedFromInput(input) {
         const id = extractGameIdFromInput(input);
@@ -801,6 +937,9 @@ class Game {
         $('#btn-info').onclick = () => this.ui.openModal('rules-modal');
         $('#btn-close-rules').onclick = () => this.ui.closeModal('rules-modal');
 
+        $('#btn-settings').onclick = () => this.openSettingsModal();
+        $('#btn-close-settings').onclick = () => this.ui.closeModal('settings-modal');
+
         $('#btn-share').onclick = () => {
             if (!this.state) return;
             const gameId = encodeGameId(this.state.puzzle);
@@ -827,25 +966,47 @@ class Game {
 
     wireGameControls() {
         $('#btn-end-round').onclick  = () => this.onEndRound();
+        // Clicking the level chip in the game header pops up an
+        // "expected effort" estimate (minimum / typical questions + rounds).
+        $('#info-level').onclick = () => this.openExpectedModal();
+        $('#btn-close-expected').onclick = () => this.ui.closeModal('expected-modal');
         $('#btn-submit-code').onclick = () => this.onSubmitCode();
         $('#btn-give-up').onclick = () => this.onGiveUp();
 
-        // Delegated click: tapping a verifier-card .marker opens the trace
-        // modal explaining how that ✓/✗ came to be. Empty markers are
-        // intentionally inert (nothing to explain yet). In extreme mode the
-        // .vopt carries data-cidx for the pane index (0 or 1); normal mode
-        // omits it and defaults to pane 0.
+        // Delegated click on verifier-option markers:
+        //   • .user-marker → cycle the hand-set marker (empty → ✓ → ✗ → ?)
+        //   • .marker      → open the deduction-trace modal (only if the
+        //                    auto marker is non-empty — empty markers have
+        //                    nothing to explain yet)
+        // In extreme mode the .vopt carries data-cidx for the pane index
+        // (0 or 1); normal mode omits it and defaults to pane 0.
         $('#verifier-row').addEventListener('click', (ev) => {
+            const um = ev.target.closest('.user-marker');
+            if (um) {
+                const vopt = um.closest('.vopt');
+                const card = um.closest('.verifier-card');
+                const vi = parseInt(card.getAttribute('data-vidx'));
+                const oi = parseInt(vopt.getAttribute('data-oi'));
+                /* istanbul ignore next -- data-cidx is always set by renderVerifiers (even normal mode uses 0); the || '0' is purely defensive against future renderer changes */
+                const ci = parseInt(vopt.getAttribute('data-cidx') || '0');
+                const next = this.state.cycleUserMarker(vi, ci, oi);
+                this.ui.updateUserMarker(vi, ci, oi, next);
+                saveActive(this.state);
+                return;
+            }
             const marker = ev.target.closest('.marker');
             if (!marker) return;
             const vopt = marker.closest('.vopt');
             const card = marker.closest('.verifier-card');
             if (!vopt || !card) return;
-            if (!marker.textContent.trim()) return;
             const vi = parseInt(card.getAttribute('data-vidx'));
             const oi = parseInt(vopt.getAttribute('data-oi'));
-            /* istanbul ignore next -- data-cidx is always set by renderVerifiers (even normal mode uses 0); the || '0' is purely defensive against future renderer changes */
             const ci = parseInt(vopt.getAttribute('data-cidx') || '0');
+            // Empty marker is interactive only when at least one past
+            // query is logged on the verifier — the modal then explains
+            // WHY no auto-deduction landed despite the queries.
+            const hasQueries = this.state.queries.some(q => q.verifierIdx === vi);
+            if (!marker.textContent.trim() && !hasQueries) return;
             this.ui.renderDeductionModal(this.deduceFor(vi, ci, oi));
         });
         $('#btn-close-deduction').onclick = () => this.ui.closeModal('deduction-modal');
@@ -853,6 +1014,43 @@ class Game {
 }
 
 // --- helpers ---------------------------------------------------------------
+// Information-theoretic estimate of how many questions and rounds a given
+// puzzle takes to solve. Same formula renderEnd uses for the post-game
+// ranking — extracted so the in-game "expected effort" modal and the
+// end-screen agree on the numbers.
+function expectedEffortFor(puzzle) {
+    const v   = puzzle.cards.length;
+    const qpr = (puzzle.config && puzzle.config.questionsPerRound)
+              || GAME_CONFIG.questionsPerRound;
+    const optsPerCard  = puzzle.cards.map(c => CARDS_BY_ID[c.id].options.length);
+    const bits         = optsPerCard.reduce((s, n) => s + Math.log2(n), 0);
+    const minQuestions = Math.max(1, Math.ceil(bits));
+    // Players rarely play perfectly — assume ~40% of queries land wide.
+    const expQuestions = Math.max(minQuestions, Math.ceil(bits * 1.4));
+    const minRounds    = Math.max(1, Math.ceil(minQuestions / qpr));
+    const expRounds    = Math.max(minRounds, Math.ceil(expQuestions / qpr));
+    return { v, qpr, bits, minQuestions, expQuestions, minRounds, expRounds };
+}
+
+// Subtitle copy for the level-info modal — explains the per-level twist on
+// top of the shared Classic source pool listed below it.
+function subtitleForLevel(levelId, n) {
+    if (levelId === 'CLASSIC') {
+        return `${n} rules. The puzzle picks however many you set on the verifier-count stepper.`;
+    }
+    if (levelId === 'HARD') {
+        return `Each slot is a MYSTERY verifier — either a combination of TWO of the ${classicSourceCount()} Classic rules merged into one verifier, or one of the following rules:`;
+    }
+    if (levelId === 'EXTREME') {
+        return `Five of the slots show TWO of these ${n} rules side by side (only one is the real criterion). A SIXTH "red herring" verifier joins them — its criterion is chosen to NEVER match the code, so it always answers NO on the solution. You don't know which slot is the herring; spot the verifier whose answers contradict the rest.`;
+    }
+    if (levelId === 'CUSTOM') {
+        return `${n} rules in the current digit range. The pool grows or shrinks with the digit-min / digit-max you pick before starting.`;
+    }
+    /* istanbul ignore next -- exhaustive over the surfaced levels; fallback for any future addition */
+    return `${n} rules.`;
+}
+
 function buildShareUrl(gameId) {
     const base = window.location.origin + window.location.pathname;
     return `${base}?game-id=${encodeURIComponent(gameId)}`;
@@ -869,7 +1067,8 @@ function extractGameIdFromInput(input) {
             if (fromQuery) return fromQuery;
         }
     } catch (e) { /* ignore */ }
-    // Plain id
-    if (/^[EMH][0-9.\-]+$/i.test(input)) return input.toUpperCase();
+    // Plain id: any current or legacy level prefix (L=Classic, H=Hard,
+    // X=Extreme, plus E/M/P kept for back-compat).
+    if (/^[LHXEMP][0-9.\-]+$/i.test(input)) return input.toUpperCase();
     return null;
 }

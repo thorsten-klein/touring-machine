@@ -229,12 +229,11 @@ const CARDS = [
         { label:'Purple = 4', test: c => c[2] === 4 },
     ]},
 
-    // --- 31-32: a color is greater than 1 / less than 4 ---
-    { id:31, topic:'A specific color is greater than 1', family:'gt1', colorParam: true, options:[
-        { label:'Blue > 1',   test: c => c[0] > 1 },
-        { label:'Yellow > 1', test: c => c[1] > 1 },
-        { label:'Purple > 1', test: c => c[2] > 1 },
-    ]},
+    // --- 32: a color is less than 4 ---
+    // (id 31 "specific color > 1" was removed — once deduced, it pins
+    // that color to {2..max} which combined with other constraints
+    // tends to reveal a single value almost immediately. Keep only the
+    // less-trivial directional cards.)
     { id:32, topic:'A specific color is less than 4', family:'lt4', colorParam: true, options:[
         { label:'Blue < 4',   test: c => c[0] < 4 },
         { label:'Yellow < 4', test: c => c[1] < 4 },
@@ -364,56 +363,50 @@ const CARDS = [
 
 ];
 
-// --- HARD+ "OR-combo" cards (constructed, not hand-written) ----------------
-// At pool-rebuild time we synthesise combo cards by unioning the option
-// lists of two easier cards. Each combo carries `multiOption: true`
-// (relaxed Ask rule + isValidPuzzle skip) and `hardplusOnly: true` (only
-// available in Hard+). The combo id encodes the source pair so encoded
-// game ids round-trip without ambiguity: id = 10000 + srcA*100 + srcB.
+// --- HARD-level OR-combo cards (constructed, not hand-written) --------------
+// At pool-rebuild time we synthesise a combo card for every (unordered) pair
+// of HAND-WRITTEN, non-hardplusOnly source cards. Each combo unions the two
+// sources' option lists; the criterion is one option from the union. The
+// Hard level draws exclusively from these — the player sees a slot that
+// asks one of two distinct rules and must work out which one.
 //
-// COMBO_PAIRS is the curated list of "compatible" source pairs to combine.
-// Only pairs whose source families don't overlap and don't already have
-// colorParam or multiOption flags qualify — we want the combos to genuinely
-// mix two unrelated rules into one card.
-const COMBO_PAIRS = [
-    ['count_1', 'count_3'],
-    ['count_1', 'count_4'],
-    ['count_2', 'count_5'],
-    ['count_3', 'count_4'],
-    ['parB',    'parY'],
-    ['parB',    'parP'],
-    ['parY',    'parP'],
-    ['countEven','sumParity'],
-    ['sum6',    'order'],
-    ['cmpBY',   'cmpBP'],
-    ['cmpBY',   'cmpYP'],
-    ['pairOrNot','sumParity'],
-    ['repPattern','sumParity'],
-];
+// Combos carry:
+//   • multiOption: true   — relaxed Ask rule + isValidPuzzle "one option
+//                           matches solution" skip (both halves may match)
+//   • hardplusOnly: true  — keeps Classic / Extreme / Custom pools clean
+//   • comboSrcA / comboSrcB — source-card ids (used by the level-info modal)
+//
+// The combo id encodes the source pair (id = 100000 + minId*1000 + maxId)
+// so encoded game ids round-trip without ambiguity. Source ids stay small
+// enough that the formula doesn't collide with scaling-card ids (1000+).
+function comboCardId(srcA, srcB) {
+    const a = Math.min(srcA, srcB), b = Math.max(srcA, srcB);
+    return 100000 + a * 1000 + b;
+}
 function generateComboCards(sourceCards) {
-    const byFamily = Object.fromEntries(sourceCards.map(c => [c.family, c]));
+    // Only the hand-written cards (id < 1000) are eligible as combo sources
+    // — scaling cards would multiply the combo pool by ~30 and slow puzzle
+    // generation to a crawl. The Hard pool ends up at ~C(N, 2) combos for N
+    // hand-written cards, which sits in the low-thousands and is fine.
+    const eligible = sourceCards.filter(c => c.id < 1000 && !c.hardplusOnly);
     const out = [];
-    for (const [famA, famB] of COMBO_PAIRS) {
-        const a = byFamily[famA];
-        const b = byFamily[famB];
-        if (!a || !b) continue;
-        // Skip if either source has been over-pruned (admissibility): both
-        // panes' options need at least 1 left for the combo to be interesting.
-        /* istanbul ignore if -- defensive: the rebuilder already drops cards
-           with <2 admissible options, so survivors all have ≥2 options. */
-        if (a.options.length < 1 || b.options.length < 1) continue;
-        const idA = a.id, idB = b.id;
-        const id = 10000 + idA * 100 + idB;
-        out.push({
-            id, topic: `${a.topic}  /  ${b.topic}`,
-            family: `combo_${famA}_${famB}`,
-            multiOption: true,
-            hardplusOnly: true,
-            options: [
-                ...a.options.map(o => ({ label: o.label, test: o.test })),
-                ...b.options.map(o => ({ label: o.label, test: o.test })),
-            ],
-        });
+    for (let i = 0; i < eligible.length; i++) {
+        for (let j = i + 1; j < eligible.length; j++) {
+            const a = eligible[i], b = eligible[j];
+            out.push({
+                id: comboCardId(a.id, b.id),
+                topic: `${a.topic}  /  ${b.topic}`,
+                family: `combo_${a.id}_${b.id}`,
+                multiOption: true,
+                hardplusOnly: true,
+                comboSrcA: a.id,
+                comboSrcB: b.id,
+                options: [
+                    ...a.options.map(o => ({ label: o.label, test: o.test })),
+                    ...b.options.map(o => ({ label: o.label, test: o.test })),
+                ],
+            });
+        }
     }
     return out;
 }

@@ -7,6 +7,28 @@
 //   tm.recent   → a small list of recent puzzles (for "Resume" UX)
 
 const STORAGE_KEY = 'tm.active';
+const SETTINGS_KEY = 'tm.settings';
+// Default user-toggleable settings. The settings modal in the topbar lets
+// the player override these; they persist across games (separate from
+// the active-puzzle blob).
+const DEFAULT_SETTINGS = {
+    autoDeduce: true,        // show ✓/✗/⊘ on verifier options
+    showPreviewArrow: true,  // live ← arrow next to options the current proposal satisfies
+};
+function loadSettings() {
+    try {
+        const raw = localStorage.getItem(SETTINGS_KEY);
+        if (!raw) return { ...DEFAULT_SETTINGS };
+        return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    } catch (e) { return { ...DEFAULT_SETTINGS }; }
+}
+function saveSettings(settings) {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
+    catch (e) { /* ignore quota errors */ }
+}
+// Cycle order for the hand-set user-markers on each verifier option.
+// '' sentinel means "no marker shown"; the cycle wraps back to it.
+const USER_MARKER_CYCLE = ['', 'check', 'cross', 'question'];
 
 class GameState {
     constructor(puzzle) {
@@ -20,6 +42,12 @@ class GameState {
         // from queries.
         this.disabledDigits  = GAME_CONFIG.colors.map(() => new Set());
         this.candidateDigits = GAME_CONFIG.colors.map(() => new Set());
+        // Hand-set "scratch pad" markers on each verifier option. Cycle:
+        // empty → 'check' → 'cross' → 'question' → empty. Keyed by
+        // "vi:pi:oi" so the same map covers normal + extreme (where pi
+        // disambiguates panes). Purely cosmetic — never feeds deduction
+        // or Ask gating, just helps the player track their thinking.
+        this.userMarkers = {};
         this.round     = 1;
         // Set by endRound() — the round counter only actually advances on the
         // next askVerifier(), so the player has a moment between rounds to
@@ -104,6 +132,20 @@ class GameState {
         const set = this.candidateDigits[colorIdx];
         if (set.has(digit)) set.delete(digit); else set.add(digit);
     }
+    // Cycles the hand-set marker on a verifier option: empty → ✓ → ✗ → ?
+    // → empty. Returns the new state so the caller can re-render that
+    // single cell without a full renderAll.
+    cycleUserMarker(vi, pi, oi) {
+        const key = `${vi}:${pi}:${oi}`;
+        const cur = this.userMarkers[key] || '';
+        const next = USER_MARKER_CYCLE[(USER_MARKER_CYCLE.indexOf(cur) + 1) % USER_MARKER_CYCLE.length];
+        if (next === '') delete this.userMarkers[key];
+        else             this.userMarkers[key] = next;
+        return next;
+    }
+    getUserMarker(vi, pi, oi) {
+        return this.userMarkers[`${vi}:${pi}:${oi}`] || '';
+    }
 
     serialize() {
         return {
@@ -119,6 +161,7 @@ class GameState {
             // Hand-curated digit-map state — not derivable, must persist.
             disabledDigits:  this.disabledDigits.map(s => Array.from(s)),
             candidateDigits: this.candidateDigits.map(s => Array.from(s)),
+            userMarkers:     { ...this.userMarkers },
             pendingNewRound: this.pendingNewRound,
         };
         // Verifier-option deductions ARE derived from `queries`, so they
@@ -139,6 +182,7 @@ class GameState {
             .map(a => new Set(a));
         s.candidateDigits = (raw.candidateDigits || GAME_CONFIG.colors.map(() => []))
             .map(a => new Set(a));
+        s.userMarkers     = raw.userMarkers ? { ...raw.userMarkers } : {};
         s.pendingNewRound = !!raw.pendingNewRound;
         return s;
     }

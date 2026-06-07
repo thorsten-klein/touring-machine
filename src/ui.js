@@ -147,18 +147,89 @@ class UI {
     }
 
     // ----- level select -----
-    renderLevelSelect(levels, onChoose, onBack) {
+    // Layout: a Classic-verifiers stepper on top (only relevant for the
+    // CLASSIC level — other levels use their own fixed counts), then the
+    // level option buttons. Each option has a magnifier icon on the right;
+    // clicking the icon stops the click before it reaches the outer button
+    // (so we don't accidentally start a game) and opens the level-info
+    // modal listing every verifier card the generator can pick from.
+    renderLevelSelect(levels, onChoose, onInfo, onBack) {
         const container = $('#level-options');
         container.innerHTML = '';
         for (const lv of levels) {
+            const info = el('span', {
+                class: 'level-info-icon',
+                title: `See verifiers available in ${lv.label}`,
+                onclick: (ev) => { ev.stopPropagation(); onInfo(lv.id); },
+                html: LEVEL_INFO_MAGNIFIER_SVG,
+            });
             const btn = el('button',
-                { class: 'level-option', onclick: () => onChoose(lv.id) },
+                { class: 'level-option', 'data-level': lv.id,
+                  onclick: () => onChoose(lv.id) },
                 el('strong', {}, lv.label),
-                el('span', {}, lv.description)
+                el('span', {}, lv.description),
+                info,
             );
             container.appendChild(btn);
         }
         $('#btn-back-to-main').onclick = onBack;
+    }
+
+    // Read / write the Classic-verifiers stepper. The stepper is part of
+    // the level select screen and only affects the CLASSIC level — other
+    // levels ignore it.
+    getClassicVerifiers() {
+        const n = parseInt($('#cv-count').textContent, 10);
+        return isFinite(n) ? n : 5;
+    }
+    setClassicVerifiers(n) {
+        $('#cv-count').textContent = String(n);
+    }
+    wireClassicStepper({ min = 3, max = 7, initial = 5 } = {}) {
+        this.setClassicVerifiers(initial);
+        const bump = (delta) => {
+            const next = Math.min(max, Math.max(min, this.getClassicVerifiers() + delta));
+            this.setClassicVerifiers(next);
+        };
+        $('#btn-cv-dec').onclick = () => bump(-1);
+        $('#btn-cv-inc').onclick = () => bump(+1);
+    }
+
+    // ----- level-info modal -----
+    // Lists every verifier card the generator may pick from for a given
+    // level. Custom is treated as "the full non-Hard+-only pool at the
+    // current digit range"; Hard+ also includes the hardplusOnly combo +
+    // pairwise cards.
+    renderLevelInfoModal({ levelLabel, subtitle, cards }) {
+        $('#level-info-title').textContent = `Verifiers available in ${levelLabel}`;
+        $('#level-info-subtitle').textContent = subtitle;
+        const body = $('#level-info-body');
+        body.innerHTML = '';
+        const list = el('ol', { class: 'level-info-list' });
+        cards.forEach((card, idx) => {
+            const tagSpans = [];
+            // (colorParam is signalled inline by emphasising the word
+            // "color" inside the topic — no separate chip.)
+            if (card.multiOption)  tagSpans.push(el('span', { class: 'lvtag lvtag-multi' }, 'multi-match'));
+            if (card.hardplusOnly) tagSpans.push(el('span', { class: 'lvtag lvtag-hp' }, 'Hard only'));
+            const topicNodes = card.colorParam
+                ? highlightColorWord(card.topic)
+                : labelToColoredNodes(card.topic);
+            const head = el('div', { class: 'lvcard-head' },
+                el('span', { class: 'lvcard-topic' }, topicNodes),
+                ...tagSpans,
+            );
+            const opts = el('ul', { class: 'lvcard-opts' },
+                ...card.options.map(o =>
+                    el('li', {}, labelToColoredNodes(o.label))));
+            // Number sits to the LEFT of the card body, outside the head.
+            list.appendChild(el('li', { class: 'lvcard' },
+                el('span', { class: 'lvcard-num' }, `${idx + 1}.`),
+                el('div', { class: 'lvcard-body' }, head, opts),
+            ));
+        });
+        body.appendChild(list);
+        this.openModal('level-info-modal');
     }
 
     // ----- proposal dials -----
@@ -210,9 +281,12 @@ class UI {
     }
 
     // ----- verifier cards row -----
-    renderVerifiers(puzzle, deductions, queries, onAsk, proposal) {
+    renderVerifiers(puzzle, deductions, queries, onAsk, proposal, userMarkers, autoDeduce, showPreviewArrow) {
         const row = $('#verifier-row');
         row.innerHTML = '';
+        const um = userMarkers || {};
+        const showAuto  = autoDeduce !== false;
+        const showArrow = showPreviewArrow !== false;
         puzzle.cards.forEach((card, i) => {
             const verifierQueries = queries.filter(q => q.verifierIdx === i);
             const verDed = deductions[i] || { panes: [], isExtreme: false };
@@ -242,7 +316,7 @@ class UI {
                                 : isConfirmed ? 'This must be the criterion'
                                 : isCross    ? 'Past query: FAIL on this rule'
                                 :               'Still possible';
-                    const wouldPass = proposal && opt.test(proposal);
+                    const wouldPass = showArrow && proposal && opt.test(proposal);
                     const preview = el('span', {
                         class: 'preview' + (wouldPass ? ' pass' : ' hidden-preview'),
                         title: wouldPass ? 'Current number would PASS this rule' : '',
@@ -256,16 +330,24 @@ class UI {
                                      : isCross                   ? '✗'
                                      : paneDead                  ? '⊘'
                                      :                             '';
-                    optsList.appendChild(el('li',
-                        { class: 'vopt'
-                            + (isConfirmed ? ' confirmed' : '')
-                            + (isCross    ? ' ruledout' : '')
-                            + (paneDead && !isCross && !isConfirmed && !isPassed ? ' pane-dead-opt' : ''),
-                          'data-vidx': i, 'data-oi': oi, 'data-cidx': paneIdx,
-                          title },
-                        el('span', { class: 'marker' }, markerChar),
+                    const userState = um[`${i}:${paneIdx}:${oi}`] || '';
+                    // Auto-deduction marker is omitted entirely when the
+                    // setting is off — neither the badge nor its box show.
+                    // The user-marker checkbox on the left remains.
+                    const children = [
+                        userMarkerSpan(userState),
+                        ...(showAuto ? [el('span', { class: 'marker' }, markerChar)] : []),
                         el('span', { class: 'vopt-label' }, labelToColoredNodes(opt.label)),
                         preview,
+                    ];
+                    optsList.appendChild(el('li',
+                        { class: 'vopt'
+                            + (showAuto && isConfirmed ? ' confirmed' : '')
+                            + (showAuto && isCross    ? ' ruledout' : '')
+                            + (showAuto && paneDead && !isCross && !isConfirmed && !isPassed ? ' pane-dead-opt' : ''),
+                          'data-vidx': i, 'data-oi': oi, 'data-cidx': paneIdx,
+                          title: showAuto ? title : 'Set your own marker on the left' },
+                        ...children,
                     ));
                 });
 
@@ -284,7 +366,7 @@ class UI {
 
             const head = isExtreme
                 ? el('div', { class: 'vcard-head' },
-                    el('div', { class: 'vletter' }, VERIFIER_LETTERS[i]),
+                    el('div', { class: 'vletter' }, verifierLetter(i)),
                     el('div', { class: 'vtopic vtopic-extreme' },
                         el('span', { class: 'extreme-tag' }, 'EXTREME'),
                         ' — one of the two cards below is real'),
@@ -293,7 +375,7 @@ class UI {
                     }, 'Ask'),
                 )
                 : el('div', { class: 'vcard-head' },
-                    el('div', { class: 'vletter' }, VERIFIER_LETTERS[i]),
+                    el('div', { class: 'vletter' }, verifierLetter(i)),
                     el('div', { class: 'vtopic' }, labelToColoredNodes(CARDS_BY_ID[panes[0].id].topic)),
                     el('button', { class: 'vbtn', 'data-ask': i,
                         onclick: () => onAsk(i)
@@ -312,31 +394,17 @@ class UI {
             if (verifierQueries.length) {
                 const log = el('div', { class: 'vqlog' });
                 verifierQueries.forEach(q => {
-                    // The "active" option at ask time is the one whose
-                    // predicate matched the number — by the 1-● Ask rule
-                    // there's always exactly one. In extreme mode we scan
-                    // both panes' options.
-                    let activeLabel = null, found = 0;
-                    for (const pane of panes) {
-                        const pdef = CARDS_BY_ID[pane.id];
-                        for (const o of pdef.options) {
-                            if (o.test(q.proposal)) { activeLabel = o.label; found++; }
-                        }
-                    }
-                    if (found !== 1) activeLabel = null;
+                    // Round + proposal + verdict only — the rule label
+                    // used to hint which option was queried, but that
+                    // gives away information that the player should
+                    // deduce, especially in Hard's combo verifiers.
                     const row = el('div', {},
                         `Round ${q.round}: `,
                         formatProposalNode(q.proposal),
+                        document.createTextNode(' → '),
+                        el('span', { class: q.result ? 'ok' : 'fail' },
+                            q.result ? '✓' : '✗'),
                     );
-                    if (activeLabel) {
-                        row.appendChild(document.createTextNode(' → '));
-                        row.appendChild(el('span', { class: 'vqlog-rule' },
-                            labelToColoredNodes(activeLabel)));
-                    }
-                    row.appendChild(document.createTextNode(' → '));
-                    row.appendChild(el('span',
-                        { class: q.result ? 'ok' : 'fail' },
-                        q.result ? '✓' : '✗'));
                     log.appendChild(row);
                 });
                 card_el.appendChild(log);
@@ -365,7 +433,8 @@ class UI {
     // Recompute the live preview marker on every verifier option without
     // rebuilding the whole verifier row. Cheap; safe to call on each dial
     // tick. In extreme mode both panes get scanned.
-    updateVerifierPreviews(puzzle, deductions, proposal) {
+    updateVerifierPreviews(puzzle, deductions, proposal, showPreviewArrow) {
+        const showArrow = showPreviewArrow !== false;
         puzzle.cards.forEach((card, i) => {
             const panes = paneListOf(card);
             panes.forEach((pane, pi) => {
@@ -379,7 +448,7 @@ class UI {
                         : `.verifier-card[data-vidx="${i}"] .vopt[data-oi="${oi}"] .preview`;
                     const node = document.querySelector(sel);
                     if (!node) return;
-                    const ok = !!opt.test(proposal);
+                    const ok = showArrow && !!opt.test(proposal);
                     if (ok) {
                         node.className = 'preview pass';
                         node.innerHTML = PREVIEW_ARROW_SVG;
@@ -392,6 +461,16 @@ class UI {
                 });
             });
         });
+    }
+
+    // In-place refresh of a single user-marker cell so cycling doesn't
+    // tear down the whole verifier row on every click.
+    updateUserMarker(vi, pi, oi, state) {
+        const node = document.querySelector(
+            `.verifier-card[data-vidx="${vi}"] .vopt[data-cidx="${pi}"][data-oi="${oi}"] .user-marker`);
+        if (!node) return;
+        node.textContent = USER_MARKER_GLYPH[state || ''] || '';
+        node.className = 'user-marker' + (state ? ' um-' + state : '');
     }
 
     setVerifierAskEnabled(i, enabled) {
@@ -644,9 +723,42 @@ class UI {
             return this.openModal('deduction-modal');
         }
 
-        // Fallback / unknown — shouldn't be clickable since marker is empty.
+        // 'unknown' — the marker is empty. With at least one past query
+        // on the verifier, explain why none of them auto-deduced this
+        // option (the click handler only opens the modal in that case).
         status.className = 'ded-status';
-        status.textContent = 'No deduction yet — no past query has touched this option.';
+        status.textContent = 'No deduction yet on this option.';
+        if (trace.verifierQueries && trace.verifierQueries.length) {
+            body.appendChild(el('p', { class: 'ded-explainer' },
+                trace.isMultiOption
+                    ? 'Auto-deduction only marks an option when EXACTLY ONE option matched your number and the verifier answered ✓. This is a combo (mystery) verifier — most queries match multiple options at once, so its YES/NO verdicts almost never pin a single option automatically.'
+                    : 'Auto-deduction only marks an option when EXACTLY ONE option matched your number AND the verifier answered ✓. Past queries that don\'t meet both conditions are kept for reference but don\'t place any marker.'));
+            body.appendChild(el('p', { class: 'ded-explainer' }, 'Past queries on this verifier:'));
+            const ul = el('ul', { class: 'ev-list' });
+            trace.verifierQueries.forEach(q => {
+                const note = ({
+                    'this-confirmed':  'matched THIS option — should be ✓ (refresh?)',
+                    'other-confirmed': 'matched a different option and got ✓ — that other option is the criterion, so THIS one is implied ruled out',
+                    'false-1pin':      trace.isMultiOption
+                        ? 'a single option matched but the verifier said NO — for combo verifiers the answer might have been about a different option, so we can\'t rule it out'
+                        : 'a single option matched but the verifier said NO — THAT matched option is ruled out (should be ✗ on it)',
+                    'no-pin':          'no option matched your number — gives no per-option info',
+                    'multi-pin':       'multiple options matched at once — verdict can\'t be pinned to any single one',
+                    'unmark':          '—',
+                })[q.why] || '—';
+                ul.appendChild(el('li', { class: q.result ? 'ev-ok' : 'ev-no' },
+                    el('span', { class: 'ev-round' }, `Round ${q.round}`),
+                    el('span', { class: 'ev-prop' }, formatProposalNode(q.proposal)),
+                    el('span', { class: 'ev-arrow' }, '→'),
+                    el('span', { class: q.result ? 'ev-result ok' : 'ev-result fail' }, q.result ? '✓' : '✗'),
+                    el('span', { class: 'ev-note' }, note),
+                ));
+            });
+            body.appendChild(ul);
+        } else {
+            body.appendChild(el('p', { class: 'ded-explainer' },
+                'No past query has touched this option yet. Ask the verifier with a number that activates exactly this option to learn more.'));
+        }
         return this.openModal('deduction-modal');
     }
 
@@ -788,12 +900,21 @@ class UI {
         puzzle.cards.forEach((card, i) => {
             const def = CARDS_BY_ID[card.id];
             const opt = def.options[card.opt];
-            const li = el('li', {},
-                el('span', { class: 'verifier-tag' }, VERIFIER_LETTERS[i]),
-                labelToColoredNodes(def.topic),
-                ': ',
-                el('strong', {}, labelToColoredNodes(opt.label)),
-            );
+            const li = el('li', { class: card.redHerring ? 'end-herring' : '' });
+            if (card.redHerring) {
+                li.appendChild(el('span', { class: 'verifier-tag' }, verifierLetter(i)));
+                li.appendChild(el('span', { class: 'herring-tag' }, 'RED HERRING'));
+                li.appendChild(el('span', { class: 'herring-note' },
+                    ' — not a real constraint. Its "criterion" (',
+                ));
+                li.appendChild(labelToColoredNodes(opt.label));
+                li.appendChild(document.createTextNode(') was chosen to never match the code, so this verifier always answered NO on the solution.'));
+            } else {
+                li.appendChild(el('span', { class: 'verifier-tag' }, verifierLetter(i)));
+                li.appendChild(labelToColoredNodes(def.topic));
+                li.appendChild(document.createTextNode(': '));
+                li.appendChild(el('strong', {}, labelToColoredNodes(opt.label)));
+            }
             // Extreme: also show the decoy that was sitting next to the
             // active criterion. Helps the player understand what they were
             // fighting against, especially when they fell for the bluff.
@@ -869,12 +990,33 @@ function classifyWin(verifiers, rounds, questions, qpr) {
     return { ...WIN_TIERS[idx], index: idx, score, efficiency: eff, pacing: pace, minRounds };
 }
 
+// Hand-set "user marker" checkbox shown to the LEFT of the auto-deduction
+// marker on every verifier option. Player clicks to cycle the state.
+const USER_MARKER_GLYPH = { '': '', check: '✓', cross: '✗', question: '?' };
+function userMarkerSpan(state) {
+    const glyph = USER_MARKER_GLYPH[state || ''] || '';
+    return el('span', {
+        class: 'user-marker' + (state ? ' um-' + state : ''),
+        title: 'Click to cycle: empty → ✓ → ✗ → ? → empty',
+        role: 'button',
+        'aria-label': state ? `your marker: ${state}` : 'set your marker',
+    }, glyph);
+}
+
 // Inline SVG arrow used as the "active option" preview marker on verifier
 // cards. Pointing left so it visually reads as "← this rule fits the number".
 const PREVIEW_ARROW_SVG =
     '<svg class="arrow-svg" viewBox="0 0 16 16" aria-hidden="true">' +
     '<path d="M14 8 L3 8 M7 4 L3 8 L7 12" fill="none" stroke="currentColor" ' +
     'stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+// Magnifier icon shown on each level-select option. Click opens the
+// level-info modal listing the verifier cards available in that level.
+const LEVEL_INFO_MAGNIFIER_SVG =
+    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" ' +
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+    'stroke-linejoin="round" aria-hidden="true">' +
+    '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>';
 
 // Replace every occurrence of a configured color name in `label` with a small
 // colored dot (`<span class="color-dot blue"/>` etc). Returns a DocumentFragment
@@ -900,13 +1042,43 @@ function labelToColoredNodes(label) {
     return frag;
 }
 
+// Like labelToColoredNodes but ALSO highlights the standalone word
+// "color" (case-insensitive) with the .color-placeholder class — used by
+// the level-info modal for colorParam cards so the parametric nature of
+// the rule reads at a glance ("A specific COLOR is less than 3").
+function highlightColorWord(label) {
+    const frag = document.createDocumentFragment();
+    const colors = GAME_CONFIG.colors;
+    const re = new RegExp('\\b(' + ['color', ...colors].join('|') + ')\\b', 'gi');
+    let lastIdx = 0, m;
+    while ((m = re.exec(label)) !== null) {
+        if (m.index > lastIdx) {
+            frag.appendChild(document.createTextNode(label.slice(lastIdx, m.index)));
+        }
+        const tok = m[1].toLowerCase();
+        if (tok === 'color') {
+            frag.appendChild(el('span', { class: 'color-placeholder' }, m[1]));
+        } else {
+            frag.appendChild(el('span', { class: `color-dot ${tok}`, title: tok }));
+        }
+        lastIdx = m.index + m[0].length;
+    }
+    if (lastIdx < label.length) {
+        frag.appendChild(document.createTextNode(label.slice(lastIdx)));
+    }
+    return frag;
+}
+
 function formatProposalNode(proposal) {
-    // One small span per color slot — coloring driven by the slot name so the
-    // helper keeps working when GAME_CONFIG.colors changes.
-    const span = el('span', {});
+    // One small "chip" per color slot — a colored dot followed by the
+    // digit. The chips read naturally as a row (no separator) since each
+    // dot anchors the start of its slot visually.
+    const span = el('span', { class: 'proposal-chips' });
     GAME_CONFIG.colors.forEach((c, i) => {
-        if (i > 0) span.appendChild(document.createTextNode('-'));
-        span.appendChild(el('span', { class: 'p' + c[0] }, String(proposal[i])));
+        span.appendChild(el('span', { class: 'pchip' },
+            el('span', { class: `color-dot ${c}` }),
+            el('span', { class: 'p' + c[0] }, String(proposal[i])),
+        ));
     });
     return span;
 }
