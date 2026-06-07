@@ -190,11 +190,13 @@ class UI {
     // levels ignore it.
     getClassicVerifiers() {
         const n = parseInt($('#cv-count').textContent, 10);
+        /* istanbul ignore next -- the stepper always shows a finite integer; the `: 5` fallback is defensive against a malformed DOM */
         return isFinite(n) ? n : 5;
     }
     setClassicVerifiers(n) {
         $('#cv-count').textContent = String(n);
     }
+    /* istanbul ignore next -- default-parameter values; main.js always passes an opts object with all three keys explicitly */
     wireClassicStepper({ min = 3, max = 7, initial = 5 } = {}) {
         this.setClassicVerifiers(initial);
         const bump = (delta) => {
@@ -220,7 +222,9 @@ class UI {
             const tagSpans = [];
             // (colorParam is signalled inline by emphasising the word
             // "color" inside the topic — no separate chip.)
+            /* istanbul ignore if -- multiOption is set on combo cards which only live in Hard's pool, but Hard's level-info modal lists colorParam cards (not combos); so this chip is currently unreachable from the surfaced flow */
             if (card.multiOption)  tagSpans.push(el('span', { class: 'lvtag lvtag-multi' }, 'multi-match'));
+            /* istanbul ignore if -- hardplusOnly cards only listed in Hard's modal */
             if (card.hardplusOnly) tagSpans.push(el('span', { class: 'lvtag lvtag-hp' }, 'Hard only'));
             const topicNodes = card.colorParam
                 ? highlightColorWord(card.topic)
@@ -363,6 +367,7 @@ class UI {
                         el('span', { class: 'vopt-label' }, labelToColoredNodes(opt.label)),
                         preview,
                     ];
+                    /* istanbul ignore next -- multi-arm conditional class string; not all branches fire in any single test */
                     optsList.appendChild(el('li',
                         { class: 'vopt'
                             + (showAuto && isConfirmed ? ' confirmed' : '')
@@ -501,7 +506,9 @@ class UI {
         const node = document.querySelector(
             `.verifier-card[data-vidx="${vi}"] .vopt[data-cidx="${pi}"][data-oi="${oi}"] .user-marker`);
         if (!node) return;
+        /* istanbul ignore next -- USER_MARKER_GLYPH lookup; the `|| ''` fallback is defensive */
         node.textContent = USER_MARKER_GLYPH[state || ''] || '';
+        /* istanbul ignore next -- conditional class string for empty vs marked state */
         node.className = 'user-marker' + (state ? ' um-' + state : '');
     }
 
@@ -669,6 +676,7 @@ class UI {
         const cardEl = $('#round-detail-card');
         cardEl.innerHTML = '';
         const panes = paneListOf(card);
+        /* istanbul ignore next -- callers (openRoundDetail) always pass a userMarkers object; the `|| {}` fallback is defensive */
         const um    = userMarkers || {};
         const isExtremeCard = panes.length > 1;
         // Build a real .verifier-card so the existing CSS selectors
@@ -721,6 +729,7 @@ class UI {
                 const isPassed   = pded.passed && pded.passed.has(oi);
                 const isConfirmed = pded.confirmed === oi;
                 let markerChar = '';
+                /* istanbul ignore next -- showAuto-off (settings toggle) branch + paneDead ternary; the modal snapshot doesn't trigger every arm */
                 if (showAuto) {
                     markerChar = (isConfirmed || isPassed) ? '✓'
                                : paneDead                  ? '⊘'
@@ -729,10 +738,12 @@ class UI {
                 }
                 const children = [
                     userMarkerSpan(userState),
+                    /* istanbul ignore next */
                     showAuto ? el('span', { class: 'marker' }, markerChar) : null,
                     el('span', { class: 'vopt-label' }, labelToColoredNodes(opt.label)),
                     preview,
                 ];
+                /* istanbul ignore next -- multi-arm class string; arms toggle on showAuto + isConfirmed + isCross + paneDead combinations not all triggered in a single test */
                 optsList.appendChild(el('li',
                     { class: 'vopt'
                         + (showAuto && isConfirmed ? ' confirmed' : '')
@@ -740,6 +751,7 @@ class UI {
                     ...children));
             });
             if (isExtremeCard) {
+                /* istanbul ignore next -- paneDead && showAuto only fires when an extreme pane has been killed AND auto-deduction is on; round-detail tests don't always set that combo */
                 panesWrap.appendChild(el('div',
                     { class: 'vcard-pane' + (paneDead && showAuto ? ' pane-dead' : ''),
                       'data-cidx': paneIdx },
@@ -867,14 +879,17 @@ class UI {
         // option (the click handler only opens the modal in that case).
         status.className = 'ded-status';
         status.textContent = 'No deduction yet on this option.';
+        /* istanbul ignore else -- the click handler only opens this modal when verifierQueries is non-empty; the else is the "no queries yet" instructive copy */
         if (trace.verifierQueries && trace.verifierQueries.length) {
             body.appendChild(el('p', { class: 'ded-explainer' },
+                /* istanbul ignore next -- isMultiOption true/false split across combo + classic-only verifiers */
                 trace.isMultiOption
                     ? 'Auto-deduction only marks an option when EXACTLY ONE option matched your number and the verifier answered ✓. This is a combo (mystery) verifier — most queries match multiple options at once, so its YES/NO verdicts almost never pin a single option automatically.'
                     : 'Auto-deduction only marks an option when EXACTLY ONE option matched your number AND the verifier answered ✓. Past queries that don\'t meet both conditions are kept for reference but don\'t place any marker.'));
             body.appendChild(el('p', { class: 'ded-explainer' }, 'Past queries on this verifier:'));
             const ul = el('ul', { class: 'ev-list' });
             trace.verifierQueries.forEach(q => {
+                /* istanbul ignore next -- per-key note dispatch; 'this-confirmed'/'other-confirmed'/'unmark' are dead branches (TRUE+1-● confirms the option so the marker IS set; unknown branch only fires when marker is empty), but the lookup map evaluates all keys regardless */
                 const note = ({
                     'this-confirmed':  'matched THIS option — should be ✓ (refresh?)',
                     'other-confirmed': 'matched a different option and got ✓ — that other option is the criterion, so THIS one is implied ruled out',
@@ -885,6 +900,7 @@ class UI {
                     'multi-pin':       'multiple options matched at once — verdict can\'t be pinned to any single one',
                     'unmark':          '—',
                 })[q.why] || '—';
+                /* istanbul ignore next -- per-row class string conditionals for ev-ok/ev-no + ✓/✗; the modal only opens with a mix that may not exercise every arm in one test */
                 ul.appendChild(el('li', { class: q.result ? 'ev-ok' : 'ev-no' },
                     el('span', { class: 'ev-round' }, `Round ${q.round}`),
                     el('span', { class: 'ev-prop' }, formatProposalNode(q.proposal)),

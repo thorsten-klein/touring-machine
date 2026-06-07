@@ -174,6 +174,7 @@ function isValidPuzzle(puzzle) {
     // soon as the second hit shows up. Red-herring cards don't constrain
     // the solution at all so dropping one is a no-op — skip them.
     for (let i = 0; i < puzzle.cards.length; i++) {
+        /* istanbul ignore if -- isValidPuzzle is only called BEFORE the herring is attached, so puzzle.cards never contains a herring at this point; the guard is defensive in case decodeGameId routes a decoded puzzle through here later */
         if (puzzle.cards[i].redHerring) continue;
         const dropped = { cards: puzzle.cards.filter((_, j) => j !== i) };
         if (solutionCountUpTo(dropped, 1) === 1) return false;
@@ -192,6 +193,7 @@ function isValidPuzzle(puzzle) {
     //   • redHerring slots aren't constraints — their criterion is chosen
     //     to NOT match the solution, so this check would always fail.
     for (const card of puzzle.cards) {
+        /* istanbul ignore if -- isValidPuzzle runs before attachRedHerring; same defensive guard as above */
         if (card.redHerring) continue;
         const def = CARDS_BY_ID[card.id];
         if (def.multiOption) continue;

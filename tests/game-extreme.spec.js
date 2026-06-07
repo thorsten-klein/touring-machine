@@ -205,50 +205,43 @@ test('extreme global rule: 2N-1 options eliminated → last one auto-confirmed',
 });
 
 test('extreme pane dies when all its options crossed by direct queries', async ({ page }) => {
-    let result = null;
-    for (const seed of [53, 67, 79, 89, 103, 127, 149, 167, 181, 199]) {
-        await startExtremePreset(page, seed);
-        result = await page.evaluate(() => {
-            const p = window.game.state.puzzle;
-            for (let vi = 0; vi < p.cards.length; vi++) {
-                const panes = paneListOf(p.cards[vi]);
-                const activeIdx = panes.findIndex(x => x.active);
-                const deadIdx   = 1 - activeIdx;
-                const activeCard = panes[activeIdx];
-                const activeOpt  = CARDS_BY_ID[activeCard.id].options[activeCard.opt];
-                const deadDef = CARDS_BY_ID[panes[deadIdx].id];
-                const allOpts = panes.flatMap(pane => CARDS_BY_ID[pane.id].options);
-                const queries = [];
-                let ok = true;
-                for (const opt of deadDef.options) {
-                    let prop = null;
-                    for (let a = 1; a <= 5 && !prop; a++)
-                    for (let b = 1; b <= 5 && !prop; b++)
-                    for (let c = 1; c <= 5 && !prop; c++) {
-                        const m = allOpts.filter(o => o.test([a, b, c]));
-                        if (m.length === 1 && m[0] === opt) prop = [a, b, c];
-                    }
-                    if (!prop) { ok = false; break; }
-                    queries.push({ round: 1, proposal: prop, verifierIdx: vi, result: false });
-                }
-                if (!ok) continue;
-                window.game.state.queries = queries;
-                const ded = window.game.computeDeductions()[vi];
-                return {
-                    found: true,
-                    deadCount: ded.panes.filter(p => p.dead).length,
-                    inactiveIsDead: ded.panes[deadIdx].dead,
-                    activeIsDead:   ded.panes[activeIdx].dead,
-                };
-            }
-            return { found: false };
-        });
-        if (result.found) break;
-    }
-    expect(result.found).toBe(true);
+    // Hand-rolled puzzle with two partial-coverage Classic cards as panes
+    // (cards 14 = "smallest color" and 15 = "greatest color"). Each has
+    // 3 options that can be isolated by a 1-● proposal; crossing all 3
+    // options of pane B kills it. Generator Extreme puzzles now always
+    // pair Classic active + multiOption combo decoy, so we can't rely on
+    // a generated puzzle to give us a Classic-Classic verifier.
+    await page.goto('');
+    const result = await page.evaluate(() => {
+        const puzzle = {
+            level: 'EXTREME',
+            cards: [{ id: 14, opt: 0, altId: 15, altOpt: 0, swap: false }],
+            config: { digitMin: 1, digitMax: 5, verifiers: 1, questionsPerRound: 3, extreme: true },
+            solution: [1, 5, 3],
+        };
+        window.game.startWithPuzzle(puzzle);
+        // FALSE+1-● queries isolating each option of pane B (card 15).
+        window.game.state.queries = [
+            // [3,1,1]: only "Blue is greatest" matches (yellow=purple=1 → no strict smallest, blue>others)
+            { round: 1, proposal: [3, 1, 1], verifierIdx: 0, result: false },
+            // [1,3,1]: only "Yellow is greatest" matches
+            { round: 1, proposal: [1, 3, 1], verifierIdx: 0, result: false },
+            // [1,1,3]: only "Purple is greatest" matches
+            { round: 1, proposal: [1, 1, 3], verifierIdx: 0, result: false },
+        ];
+        const ded = window.game.computeDeductions()[0];
+        return {
+            deadCount: ded.panes.filter(p => p.dead).length,
+            paneADead: ded.panes[0].dead,
+            paneBDead: ded.panes[1].dead,
+            paneBCrossed: [...ded.panes[1].crossed],
+        };
+    });
+    // Pane B (decoy) should be dead — all 3 of its options crossed.
+    expect(result.paneBCrossed.length).toBe(3);
+    expect(result.paneBDead).toBe(true);
+    expect(result.paneADead).toBe(false);
     expect(result.deadCount).toBe(1);
-    expect(result.inactiveIsDead).toBe(true);
-    expect(result.activeIsDead).toBe(false);
 });
 
 test('extreme end screen lists both active criterion and decoy', async ({ page }) => {

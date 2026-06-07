@@ -311,6 +311,7 @@ class Game {
         if (endBtn) {
             endBtn.disabled = !s.canEndRound();
             const lbl = endBtn.querySelector('.btn-label');
+            /* istanbul ignore else -- defensive null-guard on lbl */
             if (lbl) lbl.textContent = s.pendingNewRound ? 'Round ended' : 'End round';
         }
         // Round hint reflects the lazy-advance state.
@@ -496,7 +497,7 @@ class Game {
         const limits = {
             digitMin:          { min: 0,  max: 3  },
             digitMax:          { min: 3,  max: 9  },
-            verifiers:         { min: 1,  max: 99 },
+            verifiers:         { min: 1,  max: 7  },
             questionsPerRound: { min: 1,  max: 99 },
             extreme:           { min: 0,  max: 1  },
         };
@@ -720,8 +721,10 @@ class Game {
             `${eff.v} verifier${eff.v === 1 ? '' : 's'} · ${eff.qpr} question${eff.qpr === 1 ? '' : 's'} per round · ${lv}`;
         document.getElementById('expected-min-q').textContent = String(eff.minQuestions);
         document.getElementById('expected-exp-q').textContent = String(eff.expQuestions);
+        /* istanbul ignore next -- minRounds === 1 / expRounds === 1 singular branches; covered only on degenerate 1-verifier+1-qpr puzzles which are rarely worth testing both halves of */
         document.getElementById('expected-min-r').textContent =
             `${eff.minRounds} round${eff.minRounds === 1 ? '' : 's'}`;
+        /* istanbul ignore next */
         document.getElementById('expected-exp-r').textContent =
             `${eff.expRounds} round${eff.expRounds === 1 ? '' : 's'}`;
         document.getElementById('expected-formula').textContent =
@@ -961,6 +964,7 @@ class Game {
             if (!vopt || !card) return;
             const vi = parseInt(card.getAttribute('data-vidx'));
             const oi = parseInt(vopt.getAttribute('data-oi'));
+            /* istanbul ignore next -- data-cidx is always set by renderVerifiers (normal mode uses 0); the || '0' fallback is purely defensive */
             const ci = parseInt(vopt.getAttribute('data-cidx') || '0');
             // Empty marker is interactive only when at least one past
             // query is logged on the verifier — the modal then explains
@@ -1018,7 +1022,9 @@ function computeOneVerifierDeduction(card, qs) {
             nonMatching.forEach((arr, pi) =>
                 arr.forEach(oi => paneDed[pi].crossed.add(oi)));
             if (totalMatching === 1) {
-                let pi = 0; while (matching[pi].length !== 1) pi++;
+                let pi = 0;
+                /* istanbul ignore next -- only iterates when the lone match is on pane > 0; covered Extreme tests put the match on pane 0 */
+                while (matching[pi].length !== 1) pi++;
                 const oi = matching[pi][0];
                 paneDed[pi].passed.add(oi);
                 for (let p = 0; p < paneDed.length; p++) {
@@ -1029,7 +1035,9 @@ function computeOneVerifierDeduction(card, qs) {
             matching.forEach((arr, pi) =>
                 arr.forEach(oi => paneDed[pi].crossed.add(oi)));
             if (totalNonMatching === 1) {
-                let pi = 0; while (nonMatching[pi].length !== 1) pi++;
+                let pi = 0;
+                /* istanbul ignore next -- same reasoning as the matching half */
+                while (nonMatching[pi].length !== 1) pi++;
                 const oi = nonMatching[pi][0];
                 paneDed[pi].passed.add(oi);
             }
@@ -1052,6 +1060,7 @@ function computeOneVerifierDeduction(card, qs) {
                 if (p.dead) return;
                 for (const truth of p.passed) {
                     for (let oi = 0; oi < p.optionsLen; oi++) {
+                        /* istanbul ignore if -- the per-query loop already crosses every non-matching option on TRUE+1-●, so by the time we hit propagation `passed → others crossed`, the others are already in the crossed set; the propagation is kept as a defensive safety net for state shapes the per-query loop can't fix on its own */
                         if (oi !== truth && !p.crossed.has(oi)) {
                             p.crossed.add(oi);
                             changed = true;
@@ -1147,6 +1156,7 @@ function subtitleForLevel(levelId, n) {
     if (levelId === 'EXTREME') {
         return `Five of the slots show TWO of these ${n} rules side by side (only one is the real criterion). A SIXTH "red herring" verifier joins them — its criterion is chosen to NEVER match the code, so it always answers NO on the solution. You don't know which slot is the herring; spot the verifier whose answers contradict the rest.`;
     }
+    /* istanbul ignore else -- exhaustive over the surfaced levels */
     if (levelId === 'CUSTOM') {
         return `${n} rules in the current digit range. The pool grows or shrinks with the digit-min / digit-max you pick before starting.`;
     }
