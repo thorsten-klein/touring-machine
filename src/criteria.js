@@ -393,6 +393,12 @@ function generateComboCards(sourceCards) {
     for (let i = 0; i < eligible.length; i++) {
         for (let j = i + 1; j < eligible.length; j++) {
             const a = eligible[i], b = eligible[j];
+            // Skip pairs whose option lists overlap — the union would
+            // list the same criterion twice (e.g. "Blue < 3" appears in
+            // both "Blue compared to 3" and "A specific color is less
+            // than 3"), which reads as a bug to the player.
+            const labelsA = new Set(a.options.map(o => o.label));
+            if (b.options.some(o => labelsA.has(o.label))) continue;
             out.push({
                 id: comboCardId(a.id, b.id),
                 topic: `${a.topic}  /  ${b.topic}`,

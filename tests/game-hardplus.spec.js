@@ -37,8 +37,9 @@ test('level-info modal: Hard subtitle explains mystery mechanic; Classic source 
     await expect(page.locator('#level-info-title')).toContainText('Hard');
     // Hard's subtitle calls out the mystery mechanic.
     await expect(page.locator('#level-info-subtitle')).toContainText('MYSTERY');
-    // Color-tag chips appear on at least one card.
-    await expect(page.locator('.lvtag-color').first()).toBeVisible();
+    // colorParam cards show the styled "color" placeholder inline in
+    // their topic (the old .lvtag-color chip was dropped in favor of this).
+    await expect(page.locator('.color-placeholder').first()).toBeVisible();
     // Numbered list — the first card head carries "1.".
     await expect(page.locator('.lvcard-num').first()).toHaveText('1.');
     await page.click('#btn-close-level-info');

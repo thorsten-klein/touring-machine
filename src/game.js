@@ -101,176 +101,8 @@ class Game {
     computeDeductions() {
         const autoOff = !this.settings.autoDeduce;
         return this.state.puzzle.cards.map((card, vi) => {
-            const panes = paneListOf(card);  // [paneA] or [paneA, paneB]
-            const qs    = autoOff ? [] : this.state.queries.filter(q => q.verifierIdx === vi);
-            const paneDed = panes.map(pane => {
-                const def = CARDS_BY_ID[pane.id];
-                return {
-                    id: pane.id, opt: pane.opt,
-                    optionsLen: def.options.length,
-                    crossed: new Set(),
-                    passed:  new Set(),
-                    dead:    false,
-                };
-            });
-            const isExtreme = panes.length > 1;
-
-            // Walk queries and auto-deduce. Two cases mark:
-            //   • 1-● + ✓   →  matched option IS the criterion (passed)
-            //   • 1-● + ✗   →  matched option is NOT the criterion (crossed)
-            // Both are sound when the card has a single FIXED criterion
-            // (Classic, Extreme, colorParam): the verifier's verdict on the
-            // unique ●-option is decisive.
-            //
-            // EXCEPTION — multiOption (HARD combo) verifiers: from the
-            // player's POV the verifier may "pick one of the options" to
-            // answer; a ✗ on a 1-● proposal doesn't rule the matched
-            // option out (a different option could have been the one
-            // checked). For those, only the 1-● + ✓ case marks. 0-● and
-            // multi-● queries never auto-mark, regardless of card type.
-            const isMulti = panes.some(p => CARDS_BY_ID[p.id].multiOption);
-            for (const q of qs) {
-                let hit = null;
-                let hitCount = 0;
-                for (let pi = 0; pi < panes.length; pi++) {
-                    const def = CARDS_BY_ID[panes[pi].id];
-                    def.options.forEach((opt, oi) => {
-                        if (opt.test(q.proposal)) { hit = { pi, oi }; hitCount++; }
-                    });
-                }
-                if (hitCount !== 1) continue;
-                if (q.result) {
-                    paneDed[hit.pi].passed.add(hit.oi);
-                    // ✓ definitively pins the active pane → other pane is dead.
-                    for (let pi = 0; pi < paneDed.length; pi++) {
-                        if (pi !== hit.pi) paneDed[pi].dead = true;
-                    }
-                } else if (!isMulti) {
-                    paneDed[hit.pi].crossed.add(hit.oi);
-                }
-            }
-
-            // Propagation differs by mode.
-            //
-            //   Normal (1 pane): existing logic — passed implies every other
-            //   option on the card is crossed (sound: each card has exactly
-            //   one criterion); N-1 crossed implies the lone unmarked option
-            //   is the criterion. Both propagate to fixed point.
-            //
-            //   Extreme (2 panes): the player is asked to reason explicitly
-            //   about which card is active, so we DO NOT auto-cross sibling
-            //   options when one is ✓-passed, and we DO NOT auto-pass the
-            //   "last unmarked" option of a single pane. The only auto rules
-            //   are: any ✓ pins the other pane as dead (direct), a pane
-            //   whose every option is crossed is dead (sound), and — the
-            //   single global rule — if exactly ONE option remains across
-            //   all 2N options on the verifier (not crossed, not on a dead
-            //   pane), that option is the criterion.
-            let changed = true;
-            while (changed) {
-                changed = false;
-                // ✓ on any pane ⇒ all other panes are dead.
-                paneDed.forEach((p, pi) => {
-                    if (p.passed.size === 0) return;
-                    paneDed.forEach((q, qi) => {
-                        /* istanbul ignore next -- q.dead already true ⇒ skip; only fires on a 2nd ✓ pass after the first iteration killed the other pane */
-                        if (qi !== pi && !q.dead) { q.dead = true; changed = true; }
-                    });
-                });
-                if (!isExtreme) {
-                    // Normal-mode per-pane propagation (single pane is always
-                    // the active one, so per-card logic applies unconditionally).
-                    paneDed.forEach(p => {
-                        /* istanbul ignore if -- in normal mode the lone pane is always alive; this guard is defensive against pane-death from all-options-crossed within the same propagation loop */
-                        if (p.dead) return;
-                        for (const truth of p.passed) {
-                            for (let oi = 0; oi < p.optionsLen; oi++) {
-                                if (oi !== truth && !p.crossed.has(oi)) {
-                                    p.crossed.add(oi);
-                                    changed = true;
-                                }
-                            }
-                        }
-                        if (p.crossed.size === p.optionsLen - 1) {
-                            for (let oi = 0; oi < p.optionsLen; oi++) {
-                                if (!p.crossed.has(oi) && !p.passed.has(oi)) {
-                                    p.passed.add(oi);
-                                    changed = true;
-                                }
-                            }
-                        }
-                    });
-                }
-                // Pane death by all-options-crossed — sound in both modes
-                // (if every potential criterion of the pane is ruled out,
-                // the pane can't be the active one).
-                paneDed.forEach(p => {
-                    if (p.dead) return;
-                    if (p.crossed.size === p.optionsLen) {
-                        p.dead = true;
-                        changed = true;
-                    }
-                });
-                // EXTREME-only global rule: if exactly one option remains
-                // alive across all 2N options, that's the criterion.
-                if (isExtreme) {
-                    const alive = [];   // [{pi, oi}]
-                    paneDed.forEach((p, pi) => {
-                        if (p.dead) return;
-                        for (let oi = 0; oi < p.optionsLen; oi++) {
-                            if (!p.crossed.has(oi)) alive.push({ pi, oi });
-                        }
-                    });
-                    if (alive.length === 1) {
-                        const { pi, oi } = alive[0];
-                        if (!paneDed[pi].passed.has(oi)) {
-                            paneDed[pi].passed.add(oi);
-                            changed = true;
-                        }
-                    }
-                }
-            }
-
-            // Per-pane status + per-pane confirmed option. Confirmed is
-            // exactly `passed[0]` once passed has a single entry. Both the
-            // normal-mode "N-1 crossed → last passed" rule and the extreme
-            // "1 of 2N alive → mark passed" rule write into `passed` before
-            // this block runs, so any "criterion identified" state always
-            // shows up as passed.size === 1.
-            paneDed.forEach((p, pi) => {
-                if (p.dead) {
-                    p.paneStatus = 'dead';
-                    p.confirmed = null;
-                } else {
-                    const otherAllDead = paneDed.every((q, qi) => qi === pi || q.dead);
-                    p.paneStatus = isExtreme ? (otherAllDead ? 'active' : 'unknown') : 'active';
-                    p.confirmed = p.passed.size === 1 ? [...p.passed][0] : null;
-                }
-            });
-
-            // Aggregate the verifier-level confirmedPane (the active pane, if
-            // we've pinned it). Useful for the renderer and tests.
-            const alive = paneDed.filter(p => !p.dead);
-            const confirmedPane = alive.length === 1
-                ? paneDed.indexOf(alive[0])
-                : null;
-
-            // Backwards-compat fields: existing callers (renderers, the
-            // end-screen criteria list, tests) used to read crossed/passed/
-            // confirmed at the verifier level. In normal mode these collapse
-            // to the single pane; in extreme they collapse to the active
-            // pane if known, else expose empty sets.
-            const primary = confirmedPane !== null ? paneDed[confirmedPane] : paneDed[0];
-            return {
-                panes: paneDed,
-                confirmedPane,
-                isExtreme,
-                // Mirrors of primary for legacy reads (only meaningful in
-                // normal mode or once the active pane is identified).
-                crossed:  primary.crossed,
-                passed:   primary.passed,
-                confirmed: confirmedPane !== null ? primary.confirmed : null,
-            };
+            const qs = autoOff ? [] : this.state.queries.filter(q => q.verifierIdx === vi);
+            return computeOneVerifierDeduction(card, qs);
         });
     }
 
@@ -529,13 +361,29 @@ class Game {
     }
 
     refreshAskButtons() {
-        const globallyCan = this.state.canQueryThisRound();
+        const s = this.state;
+        const globallyCan = s.canQueryThisRound();
         // Per-verifier rule: Ask is greyed out when more than one option's
         // preview is ● (the answer would be ambiguous). 0 ● is also disabled —
         // the answer would be FAIL with certainty, yielding no information.
-        this.state.puzzle.cards.forEach((_, vi) => {
-            const active = this.activeCountFor(vi);
-            this.ui.setVerifierAskEnabled(vi, globallyCan && active === 1);
+        // When disabled we surface the cause via a `title` tooltip so the
+        // player isn't left guessing why the button is grey.
+        s.puzzle.cards.forEach((_, vi) => {
+            const active  = this.activeCountFor(vi);
+            const enabled = globallyCan && active === 1;
+            let reason = '';
+            if (!enabled) {
+                if (s.finished) {
+                    reason = 'The game is over.';
+                } else if (!globallyCan) {
+                    reason = `No questions left in round ${s.round} — click "End round" to start a new one.`;
+                } else if (active === 0) {
+                    reason = 'No option on this verifier matches your current number. Adjust the dials so exactly one option matches before asking.';
+                } else {
+                    reason = `${active} options on this verifier match your current number — Ask needs exactly one (●) so the verifier\'s answer is unambiguous. Adjust the dials.`;
+                }
+            }
+            this.ui.setVerifierAskEnabled(vi, enabled, reason);
         });
     }
 
@@ -828,6 +676,37 @@ class Game {
         };
     }
 
+    // ---------- round-detail modal ----------
+    // Opened by clicking a "Round N" tag inside a verifier card's
+    // vqlog. Shows the proposal asked AT that query, plus a snapshot of
+    // how the verifier card looked AFTER that round — with arrow always
+    // visible (independent of the live-preview setting) and markers as
+    // of that point in time (if auto-deduction is enabled).
+    openRoundDetail(verifierIdx, queryGlobalIdx) {
+        const state   = this.state;
+        const card    = state.puzzle.cards[verifierIdx];
+        const query   = state.queries[queryGlobalIdx];
+        if (!query) return;
+        // Snapshot: deductions derived only from queries up to and
+        // including this one.
+        const snapshotQueries = state.queries.slice(0, queryGlobalIdx + 1)
+            .filter(q => q.verifierIdx === verifierIdx);
+        const snapshotDed = computePaneDeductionsFor(card, snapshotQueries);
+        this.ui.renderRoundDetailModal({
+            verifierLetter: verifierLetter(verifierIdx),
+            round: query.round,
+            result: query.result,
+            proposal: query.proposal,
+            card,
+            paneDeductions: snapshotDed,
+            userMarkers: state.userMarkers,
+            verifierIdx,
+            showAuto: !!this.settings.autoDeduce,
+        });
+        document.getElementById('btn-close-round-detail').onclick =
+            () => this.ui.closeModal('round-detail-modal');
+    }
+
     // ---------- expected-effort modal ----------
     // Opened by clicking the level name in the game header. Shows the
     // same info-theoretic estimates the end screen uses, but BEFORE the
@@ -896,6 +775,78 @@ class Game {
         });
         document.getElementById('btn-close-level-info').onclick =
             () => this.ui.closeModal('level-info-modal');
+    }
+
+    // ---------- "Create game for my number" flow ----------
+    // Player picks a target code AND a level (Classic / Hard / Extreme),
+    // generator produces a puzzle whose unique solution equals the code.
+    // Built for sharing — the player then sends the resulting game ID to
+    // friends so they play YOUR puzzle.
+    openMyCodeModal() {
+        // Preset levels assume the default range, so generate at 1..5.
+        reconfigureGame({ digitMin: 1, digitMax: 5 });
+        GAME_CONFIG.questionsPerRound = 3;
+
+        const proposal = GAME_CONFIG.colors.map(() => GAME_CONFIG.digitMin);
+        this.ui.renderProposalDials('#mycode-dials', proposal, (p) => {
+            proposal.splice(0, proposal.length, ...p);
+        });
+
+        // Level radio buttons — toggle the Classic-verifiers stepper based
+        // on which level is selected.
+        const stepperWrap = document.getElementById('mycode-classic-stepper');
+        const refreshStepper = () => {
+            const lv = document.querySelector('input[name="mycode-level"]:checked').value;
+            stepperWrap.hidden = (lv !== 'CLASSIC');
+        };
+        document.querySelectorAll('input[name="mycode-level"]').forEach(r => {
+            r.onchange = refreshStepper;
+        });
+        // Reset to Classic at open + reset verifier count.
+        document.querySelector('input[name="mycode-level"][value="CLASSIC"]').checked = true;
+        refreshStepper();
+        let classicVerifiers = 5;
+        document.getElementById('mc-cv-count').textContent = String(classicVerifiers);
+        const bump = (d) => {
+            classicVerifiers = Math.min(7, Math.max(3, classicVerifiers + d));
+            document.getElementById('mc-cv-count').textContent = String(classicVerifiers);
+        };
+        document.getElementById('btn-mc-cv-dec').onclick = () => bump(-1);
+        document.getElementById('btn-mc-cv-inc').onclick = () => bump(+1);
+
+        const status  = document.getElementById('mycode-status');
+        const spinner = document.getElementById('mycode-spinner');
+        status.textContent = '';
+        spinner.hidden = true;
+
+        document.getElementById('btn-mycode-cancel').onclick =
+            () => this.ui.closeModal('mycode-modal');
+        document.getElementById('btn-mycode-start').onclick = () => {
+            const lv = document.querySelector('input[name="mycode-level"]:checked').value;
+            const code = proposal.slice();
+            spinner.hidden = false;
+            status.textContent = 'Building a puzzle for your code…';
+            // Non-blocking so the spinner has a chance to paint before the
+            // (potentially slow) generator runs.
+            setTimeout(() => {
+                let puzzle = null;
+                for (let i = 0; i < 5 && !puzzle; i++) {
+                    puzzle = generatePuzzle(lv, undefined, {
+                        verifiers: lv === 'CLASSIC' ? classicVerifiers : undefined,
+                        fixedSolution: code,
+                    });
+                }
+                spinner.hidden = true;
+                if (!puzzle) {
+                    status.textContent = "Couldn't build a puzzle for that code. Try a different code or level.";
+                    return;
+                }
+                this.ui.closeModal('mycode-modal');
+                clearActive();
+                this.beginWithPuzzle(puzzle);
+            }, 30);
+        };
+        this.ui.openModal('mycode-modal');
     }
 
     // ---------- shared puzzle flow ----------
@@ -981,6 +932,15 @@ class Game {
         // In extreme mode the .vopt carries data-cidx for the pane index
         // (0 or 1); normal mode omits it and defaults to pane 0.
         $('#verifier-row').addEventListener('click', (ev) => {
+            // Click on a "Round N" tag in a verifier-card vqlog → open the
+            // round-detail modal.
+            const roundTag = ev.target.closest('.vqlog-round');
+            if (roundTag) {
+                const vi  = parseInt(roundTag.getAttribute('data-vidx'));
+                const qi  = parseInt(roundTag.getAttribute('data-qidx'));
+                this.openRoundDetail(vi, qi);
+                return;
+            }
             const um = ev.target.closest('.user-marker');
             if (um) {
                 const vopt = um.closest('.vopt');
@@ -1014,6 +974,149 @@ class Game {
 }
 
 // --- helpers ---------------------------------------------------------------
+// Computes the pane-level deduction state for a single verifier card given
+// the queries on it. Universal auto-deduction rule — applies to Classic,
+// Hard combos, and Extreme equally:
+//
+//   query (P, result=true):  criterion(P) = true →
+//       criterion ∈ {options that match P} →
+//       every OTHER option (non-matching) is NOT the criterion → cross.
+//       If exactly one option matches → it IS the criterion (passed,
+//       and in Extreme it pins the active pane and kills the other).
+//
+//   query (P, result=false): criterion(P) = false →
+//       criterion ∈ {options that DON'T match P} →
+//       every MATCHING option is NOT the criterion → cross.
+//       If exactly one non-matching option remains → it's the criterion.
+function computeOneVerifierDeduction(card, qs) {
+    const panes = paneListOf(card);
+    const paneDed = panes.map(pane => {
+        const def = CARDS_BY_ID[pane.id];
+        return {
+            id: pane.id, opt: pane.opt,
+            optionsLen: def.options.length,
+            crossed: new Set(),
+            passed:  new Set(),
+            dead:    false,
+        };
+    });
+    const isExtreme = panes.length > 1;
+
+    for (const q of qs) {
+        const matching    = panes.map(() => []);
+        const nonMatching = panes.map(() => []);
+        for (let pi = 0; pi < panes.length; pi++) {
+            const def = CARDS_BY_ID[panes[pi].id];
+            def.options.forEach((opt, oi) => {
+                if (opt.test(q.proposal)) matching[pi].push(oi);
+                else                       nonMatching[pi].push(oi);
+            });
+        }
+        const totalMatching    = matching.reduce((s, a) => s + a.length, 0);
+        const totalNonMatching = nonMatching.reduce((s, a) => s + a.length, 0);
+        if (q.result) {
+            nonMatching.forEach((arr, pi) =>
+                arr.forEach(oi => paneDed[pi].crossed.add(oi)));
+            if (totalMatching === 1) {
+                let pi = 0; while (matching[pi].length !== 1) pi++;
+                const oi = matching[pi][0];
+                paneDed[pi].passed.add(oi);
+                for (let p = 0; p < paneDed.length; p++) {
+                    if (p !== pi) paneDed[p].dead = true;
+                }
+            }
+        } else {
+            matching.forEach((arr, pi) =>
+                arr.forEach(oi => paneDed[pi].crossed.add(oi)));
+            if (totalNonMatching === 1) {
+                let pi = 0; while (nonMatching[pi].length !== 1) pi++;
+                const oi = nonMatching[pi][0];
+                paneDed[pi].passed.add(oi);
+            }
+        }
+    }
+
+    let changed = true;
+    while (changed) {
+        changed = false;
+        paneDed.forEach((p, pi) => {
+            if (p.passed.size === 0) return;
+            paneDed.forEach((q, qi) => {
+                /* istanbul ignore next -- second-pass no-op once initial mark already killed the other pane */
+                if (qi !== pi && !q.dead) { q.dead = true; changed = true; }
+            });
+        });
+        if (!isExtreme) {
+            paneDed.forEach(p => {
+                /* istanbul ignore if -- normal mode lone pane is always alive */
+                if (p.dead) return;
+                for (const truth of p.passed) {
+                    for (let oi = 0; oi < p.optionsLen; oi++) {
+                        if (oi !== truth && !p.crossed.has(oi)) {
+                            p.crossed.add(oi);
+                            changed = true;
+                        }
+                    }
+                }
+                if (p.crossed.size === p.optionsLen - 1) {
+                    for (let oi = 0; oi < p.optionsLen; oi++) {
+                        if (!p.crossed.has(oi) && !p.passed.has(oi)) {
+                            p.passed.add(oi);
+                            changed = true;
+                        }
+                    }
+                }
+            });
+        }
+        paneDed.forEach(p => {
+            if (p.dead) return;
+            if (p.crossed.size === p.optionsLen) { p.dead = true; changed = true; }
+        });
+        if (isExtreme) {
+            const alive = [];
+            paneDed.forEach((p, pi) => {
+                if (p.dead) return;
+                for (let oi = 0; oi < p.optionsLen; oi++) {
+                    if (!p.crossed.has(oi)) alive.push({ pi, oi });
+                }
+            });
+            if (alive.length === 1) {
+                const { pi, oi } = alive[0];
+                if (!paneDed[pi].passed.has(oi)) {
+                    paneDed[pi].passed.add(oi);
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    paneDed.forEach((p, pi) => {
+        if (p.dead) {
+            p.paneStatus = 'dead';
+            p.confirmed  = null;
+        } else {
+            const otherAllDead = paneDed.every((q, qi) => qi === pi || q.dead);
+            p.paneStatus = isExtreme ? (otherAllDead ? 'active' : 'unknown') : 'active';
+            p.confirmed  = p.passed.size === 1 ? [...p.passed][0] : null;
+        }
+    });
+
+    const alive = paneDed.filter(p => !p.dead);
+    const confirmedPane = alive.length === 1 ? paneDed.indexOf(alive[0]) : null;
+    const primary = confirmedPane !== null ? paneDed[confirmedPane] : paneDed[0];
+
+    return {
+        panes: paneDed,
+        confirmedPane,
+        isExtreme,
+        crossed:  primary.crossed,
+        passed:   primary.passed,
+        confirmed: confirmedPane !== null ? primary.confirmed : null,
+    };
+}
+// Alias for the round-detail snapshot caller — same algorithm.
+const computePaneDeductionsFor = (card, qs) => computeOneVerifierDeduction(card, qs);
+
 // Information-theoretic estimate of how many questions and rounds a given
 // puzzle takes to solve. Same formula renderEnd uses for the post-game
 // ranking — extracted so the in-game "expected effort" modal and the

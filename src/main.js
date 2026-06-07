@@ -8,13 +8,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const game = new Game(ui);
     window.game = game;
 
-    // Hide legacy LEVELS aliases (EASY/MEDIUM/HARDPLUS) from the level
-    // picker — they exist only for backwards-compat with old game IDs.
-    const levels = Object.values(LEVELS).filter(lv => !lv._legacy);
+    // Standard levels above the "Others" separator; Custom + Create-game
+    // sit below. Legacy LEVELS aliases (EASY/MEDIUM/HARDPLUS) are not
+    // included — they exist only for backwards-compat with old game IDs.
+    const items = [
+        LEVELS.CLASSIC,
+        LEVELS.HARD,
+        LEVELS.EXTREME,
+        { separator: 'Others' },
+        LEVELS.CUSTOM,
+        LEVELS.MYCODE,
+    ];
     ui.wireClassicStepper({ min: 3, max: 7, initial: 5 });
-    ui.renderLevelSelect(levels,
+    ui.renderLevelSelect(items,
         (lvId) => {
             if (lvId === 'CUSTOM')       game.openCustomLevelModal();
+            else if (lvId === 'MYCODE')  game.openMyCodeModal();
             else if (lvId === 'CLASSIC') game.startNew('CLASSIC', undefined,
                                             { verifiers: ui.getClassicVerifiers() });
             else                         game.startNew(lvId);

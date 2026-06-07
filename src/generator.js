@@ -130,6 +130,40 @@ function cardPrefixes(card) {
     return card._prefixes;
 }
 
+// True iff the chosen criteria together rule out at least one option on
+// some other (non-redHerring) card BEFORE the player asks anything —
+// i.e. that option has zero codes that satisfy both the criteria set and
+// the option itself. Example: criterion "A specific color > 3" with
+// active option "Blue > 3" combined with card "Whether all numbers are
+// below or above 3" — the latter's "All < 3" option becomes impossible
+// the moment the player learns the former, so it's free deduction the
+// puzzle never intended. We reject such puzzles in generation.
+function hasImpliedDeadOption(puzzle) {
+    const real = puzzle.cards.filter(c => !c.redHerring);
+    const allTests = real.map(({id, opt}) => CARDS_BY_ID[id].options[opt].test);
+    // For each card C, check every NON-chosen option against the OTHER
+    // cards' criteria (excluding C's own — otherwise non-chosen options
+    // trivially conflict with C's chosen one). If no code satisfies the
+    // option AND all other criteria, the player can deduce ✗ on that
+    // option from the puzzle's setup alone — a leaked deduction we don't
+    // want.
+    for (let cIdx = 0; cIdx < real.length; cIdx++) {
+        const c = real[cIdx];
+        const def = CARDS_BY_ID[c.id];
+        const otherTests = allTests.filter((_, i) => i !== cIdx);
+        for (let oi = 0; oi < def.options.length; oi++) {
+            if (oi === c.opt) continue;
+            const ot = def.options[oi].test;
+            let any = false;
+            for (const code of ALL_CODES) {
+                if (ot(code) && otherTests.every(t => t(code))) { any = true; break; }
+            }
+            if (!any) return true;
+        }
+    }
+    return false;
+}
+
 function isValidPuzzle(puzzle) {
     const sols = solutionsFor(puzzle);
     if (sols.length !== 1) return false;
@@ -165,6 +199,12 @@ function isValidPuzzle(puzzle) {
         for (const opt of def.options) if (opt.test(solution)) pass++;
         if (pass !== 1) return false;
     }
+
+    // Only check for "implied dead" options on non-hardplus puzzles:
+    // Hard's combo verifiers don't auto-deduce per option anyway, so
+    // the leak isn't visible to the player there, and enforcing the
+    // rule blows past the generation budget given Hard's narrow pool.
+    if (!puzzle.config.hardplus && hasImpliedDeadOption(puzzle)) return false;
     // Prefix-uniqueness is enforced at card-selection time in generatePuzzle
     // (so we don't even build puzzles that would fail it), so no need to
     // re-check it here.
@@ -184,11 +224,17 @@ const LEVELS = {
     CLASSIC: { id:'CLASSIC', label:'Classic', verifiers:5,
                description:'The standard rule pool — pick how many verifiers you want above' },
     HARD:    { id:'HARD',    label:'Hard',    verifiers:Math.min(5, GAME_CONFIG.maxVerifiers), hardplus:true,
-               description:'5 verifiers · ≥3 "which color does X?" rules + OR-combo cards' },
+               description:'Same as Classic, but using OR-combo cards' },
     EXTREME: { id:'EXTREME', label:'Extreme', verifiers:Math.min(5, GAME_CONFIG.maxVerifiers), extreme:true,
                description:'5 real verifiers (each shows TWO cards, only one is real) PLUS a 6th red-herring verifier' },
     CUSTOM:  { id:'CUSTOM',  label:'Custom level', verifiers:0,
                description:'Pick your own digit range and verifier count' },
+    // "Create game for my number" — the player picks a code AND a level
+    // (Classic/Hard/Extreme), the generator produces a puzzle whose
+    // unique solution equals the chosen code. Meant for sharing the
+    // game id with friends so they can play YOUR puzzle.
+    MYCODE:  { id:'MYCODE',  label:'Create game for my number', verifiers:0, noInfo:true,
+               description:'Pick a code and a level — share the resulting puzzle with friends' },
     // Legacy entries kept so old game IDs and existing tests keep working.
     // _legacy:true is the filter main.js uses to hide them on level select.
     EASY:     { id:'EASY',     label:'Classic', verifiers:4, _legacy:true },
@@ -275,6 +321,12 @@ function generatePuzzle(level, seed, opts = {}) {
         // active color. Enforcing distinct prefixes here would also make 6
         // verifiers from the colorParam pool nearly impossible to source.
         const usedPrefixes = new Set();
+        // ALSO track each chosen card's full option labels — no two cards
+        // in the same puzzle may list an identical option text. Catches
+        // overlaps that prefix-uniqueness misses (e.g. card 2 "Blue < 3"
+        // option matches card 26 "Blue < 3" option exactly) AND applies
+        // uniformly to Hard's combo pool where prefix-uniqueness is off.
+        const usedOptionLabels = new Set();
         for (const card of shuffled) {
             if (chosen.length === verifiers) break;
             /* istanbul ignore if -- with the default pruned card pool, no two surviving cards share a family, so this dedup is defensive against future config changes */
@@ -287,10 +339,26 @@ function generatePuzzle(level, seed, opts = {}) {
                 }
                 if (clash) continue;
             }
-            const opt = Math.floor(rng() * card.options.length);
+            if (card.options.some(o => usedOptionLabels.has(o.label))) continue;
+            // opts.fixedSolution constrains the option choice: only options
+            // the target code satisfies are eligible — guarantees that the
+            // target IS a solution. (isValidPuzzle then verifies it's the
+            // UNIQUE solution; if not, the attempt continues.)
+            let opt;
+            if (opts.fixedSolution) {
+                const validOpts = [];
+                for (let i = 0; i < card.options.length; i++) {
+                    if (card.options[i].test(opts.fixedSolution)) validOpts.push(i);
+                }
+                if (!validOpts.length) continue;
+                opt = validOpts[Math.floor(rng() * validOpts.length)];
+            } else {
+                opt = Math.floor(rng() * card.options.length);
+            }
             chosen.push({ id: card.id, opt });
             usedFamilies.add(card.family);
             for (const p of prefs) usedPrefixes.add(p);
+            for (const o of card.options) usedOptionLabels.add(o.label);
         }
         if (chosen.length < verifiers) continue;
         const puzzle = {
@@ -314,7 +382,14 @@ function generatePuzzle(level, seed, opts = {}) {
         // and may collide with prefixes of other slots' actives; both are
         // intentional and add to the bluff.
         if (extreme) {
-            const ok = attachDecoys(puzzle, rng);
+            // Every Extreme slot pairs the Classic active with an
+            // OR-combo decoy — pairing two Classic cards in one slot
+            // makes the Ask-rule grey-out unnecessarily strict (e.g. on
+            // [1,1,1] two natural Classic options match in different
+            // panes). Combo decoys carry multiOption, which relaxes the
+            // 1-● gate to "always askable" — the player gets to ask any
+            // proposal and reason about the YES/NO answer.
+            const ok = attachDecoys(puzzle, rng, { minCombo: puzzle.cards.length });
             /* istanbul ignore if -- triggered only when the pool has no different-family decoy for some slot; tested directly via the attachDecoys-stubbed test */
             if (!ok) continue;
         }
@@ -347,26 +422,33 @@ function generatePuzzle(level, seed, opts = {}) {
 function attachRedHerring(puzzle, rng) {
     const solution = puzzle.solution;
     const usedFamilies = new Set(puzzle.cards.map(c => CARDS_BY_ID[c.id].family));
+    const usedLabels   = usedOptionLabelsIn(puzzle);
     // Active card pool: non-hardplusOnly, family not yet used, with at
-    // least one option that does NOT match the solution.
+    // least one option that does NOT match the solution AND no option-label
+    // overlap with any card already in the puzzle.
     const activeCands = CARDS.filter(c =>
         !c.hardplusOnly && !usedFamilies.has(c.family) &&
-        c.options.some(o => !o.test(solution)));
+        c.options.some(o => !o.test(solution)) &&
+        !c.options.some(o => usedLabels.has(o.label)));
     if (!activeCands.length) return false;
     const shuffledActives = shuffle(rng, activeCands);
     for (const card of shuffledActives) {
         const okOpts = card.options
             .map((opt, oi) => ({ oi, opt }))
             .filter(({ opt }) => !opt.test(solution));
+        /* istanbul ignore if -- activeCands already filtered to cards with ≥1 such option */
         if (!okOpts.length) continue;
         const pick = okOpts[Math.floor(rng() * okOpts.length)];
-        // Decoy for the herring's pair: any card from a different family
-        // than the herring's active card (also not used by a real slot).
+        // Decoy for the herring's pair: an OR-combo (matches every other
+        // Extreme slot, which use combo decoys uniformly) so the herring
+        // doesn't end up as the only Classic-Classic pair in the puzzle.
+        const heldLabels = new Set([...usedLabels, ...card.options.map(o => o.label)]);
         const decoyCands = CARDS.filter(c =>
-            !c.hardplusOnly &&
+            c.hardplusOnly &&
             c.family !== card.family &&
-            c.id !== card.id);
-        /* istanbul ignore if -- with a Classic pool of 30+ families, a decoy from a different family always exists */
+            c.id !== card.id &&
+            !c.options.some(o => heldLabels.has(o.label)));
+        /* istanbul ignore if -- with a Classic pool of 30+ families, a label-distinct decoy from a different family always exists */
         if (!decoyCands.length) continue;
         const decoy = decoyCands[Math.floor(rng() * decoyCands.length)];
         const decoyOpt = Math.floor(rng() * decoy.options.length);
@@ -383,21 +465,52 @@ function attachRedHerring(puzzle, rng) {
     return false;
 }
 
+// Collects every option label currently in use across the puzzle's active
+// AND decoy cards. Generators use this to reject candidates whose options
+// would duplicate an existing one — "Blue < 3" must appear at most once.
+function usedOptionLabelsIn(puzzle) {
+    const out = new Set();
+    for (const c of puzzle.cards) {
+        for (const o of CARDS_BY_ID[c.id].options) out.add(o.label);
+        if (c.altId !== undefined) {
+            for (const o of CARDS_BY_ID[c.altId].options) out.add(o.label);
+        }
+    }
+    return out;
+}
+
 // For each verifier slot, pick a decoy card with a different family than the
-// slot's active card. Returns true on success; false if the pool is too small
-// to provide a same-slot family-distinct decoy for every slot (in which case
-// the caller will retry with a different seed). Mutates puzzle.cards in place.
-function attachDecoys(puzzle, rng) {
-    for (const slot of puzzle.cards) {
+// slot's active card AND no option-label overlap with any other card already
+// in the puzzle. Returns true on success; false if the pool is too small to
+// provide such a decoy for every slot (in which case the caller will retry
+// with a different seed). Mutates puzzle.cards in place.
+// Attaches a decoy pane to every slot in `puzzle.cards`. opts.minCombo
+// forces the first N slots (in a random order) to draw their decoy from
+// the OR-combo (hardplusOnly) pool — used by Extreme to guarantee at
+// least 3 multiOption decoys per puzzle. Remaining slots draw from the
+// Classic source pool. Returns false when the pool can't satisfy the
+// constraints (caller retries with a fresh seed).
+function attachDecoys(puzzle, rng, opts = {}) {
+    const used     = usedOptionLabelsIn(puzzle);
+    const minCombo = opts.minCombo || 0;
+    // Shuffle slot indices so the combo decoys land on random slots.
+    const order = shuffle(rng, puzzle.cards.map((_, i) => i));
+    for (let k = 0; k < order.length; k++) {
+        const slot = puzzle.cards[order[k]];
         const activeDef = CARDS_BY_ID[slot.id];
-        const candidates = CARDS.filter(c =>
-            c.family !== activeDef.family && c.id !== slot.id);
+        const wantCombo = k < minCombo;
+        const candidates = CARDS.filter(c => {
+            if (wantCombo ? !c.hardplusOnly : c.hardplusOnly) return false;
+            return c.family !== activeDef.family && c.id !== slot.id &&
+                   !c.options.some(o => used.has(o.label));
+        });
         if (!candidates.length) return false;
         const pick = candidates[Math.floor(rng() * candidates.length)];
         const optIdx = Math.floor(rng() * pick.options.length);
         slot.altId  = pick.id;
         slot.altOpt = optIdx;
         slot.swap   = rng() < 0.5;
+        for (const o of pick.options) used.add(o.label);
     }
     return true;
 }

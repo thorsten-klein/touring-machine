@@ -321,6 +321,21 @@
     </div>
 </div>
 
+<!-- Round-detail modal — opened by clicking a "Round N" tag in a verifier
+     card's vqlog. Shows the asked number with live arrow + verifier-card
+     snapshot of how this verifier looked AFTER that round. -->
+<div id="round-detail-modal" class="modal hidden">
+    <div class="modal-content">
+        <h3 id="round-detail-title">Round detail</h3>
+        <p class="hint" id="round-detail-subtitle"></p>
+        <div id="round-detail-proposal" class="rd-proposal"></div>
+        <div id="round-detail-card"></div>
+        <div class="menu-buttons">
+            <button id="btn-close-round-detail" class="btn-back">Close</button>
+        </div>
+    </div>
+</div>
+
 <!-- Expected-effort modal — opened by clicking the level name in the game header. -->
 <div id="expected-modal" class="modal hidden">
     <div class="modal-content">
@@ -403,6 +418,38 @@
         <div class="menu-buttons">
             <button id="btn-confirm-giveup" class="danger">Give up</button>
             <button id="btn-cancel-giveup" class="btn-back">Keep playing</button>
+        </div>
+    </div>
+</div>
+
+<!-- "Create game for my number" modal — pick a target code AND a level
+     (Classic/Hard/Extreme); generator produces a puzzle whose unique
+     solution equals that code so the creator can share the game id. -->
+<div id="mycode-modal" class="modal hidden">
+    <div class="modal-content">
+        <h3>Create game for my number</h3>
+        <p class="hint">Choose a code and a level. The puzzle generated will have YOUR code as the unique solution — share the game ID so friends play your puzzle.</p>
+        <div id="mycode-dials" class="dials-row"></div>
+        <div class="mycode-level-pick">
+            <label class="mycode-lv"><input type="radio" name="mycode-level" value="CLASSIC" checked> Classic</label>
+            <label class="mycode-lv"><input type="radio" name="mycode-level" value="HARD"> Hard</label>
+            <label class="mycode-lv"><input type="radio" name="mycode-level" value="EXTREME"> Extreme</label>
+        </div>
+        <div id="mycode-classic-stepper" class="classic-stepper">
+            <div class="cv-label">Classic verifiers</div>
+            <div class="cv-controls">
+                <button id="btn-mc-cv-dec" class="dial-step" aria-label="fewer verifiers">−</button>
+                <span id="mc-cv-count" class="cv-count">5</span>
+                <button id="btn-mc-cv-inc" class="dial-step" aria-label="more verifiers">+</button>
+            </div>
+        </div>
+        <div id="mycode-status-row" class="custom-status-row">
+            <span id="mycode-spinner" class="spinner" hidden></span>
+            <p id="mycode-status" class="custom-status"></p>
+        </div>
+        <div class="menu-buttons">
+            <button id="btn-mycode-start" class="primary">Create &amp; play</button>
+            <button id="btn-mycode-cancel" class="btn-back">Cancel</button>
         </div>
     </div>
 </div>
