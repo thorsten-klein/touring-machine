@@ -46,14 +46,15 @@ test('custom modal: triggers digitMin >= digitMax adjustment via digitMin (key="
     await page.click('#btn-cancel-custom');
 });
 
-test('custom modal: verifier max clamp (push to 99)', async ({ page }) => {
-    test.setTimeout(60000);
+test('custom modal: verifier max clamp (push past 7)', async ({ page }) => {
+    test.setTimeout(30000);
     await page.goto('');
     await page.click('#btn-start-game');
     await page.click('#level-options .level-option:has(strong:text("Custom"))');
-    for (let i = 0; i < 100; i++) await page.click('button[data-cfg="verifiers"][data-delta="1"]');
-    await expect(page.locator('#cfg-verifiers')).toHaveText('99');
-    for (let i = 0; i < 96;  i++) await page.click('button[data-cfg="verifiers"][data-delta="-1"]');
+    // Click way past the cap; stepper should clamp at 7.
+    for (let i = 0; i < 12; i++) await page.click('button[data-cfg="verifiers"][data-delta="1"]');
+    await expect(page.locator('#cfg-verifiers')).toHaveText('7');
+    for (let i = 0; i < 4;  i++) await page.click('button[data-cfg="verifiers"][data-delta="-1"]');
     await page.click('#btn-cancel-custom');
 });
 

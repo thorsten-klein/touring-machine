@@ -8,14 +8,31 @@ document.addEventListener('DOMContentLoaded', () => {
     const game = new Game(ui);
     window.game = game;
 
-    const levels = Object.values(LEVELS);
-    ui.renderLevelSelect(levels, (lvId) => {
-        if (lvId === 'CUSTOM') game.openCustomLevelModal();
-        else                   game.startNew(lvId);
-    }, () => {
-        ui.showScreen('main');
-        game.refreshMainMenu();
-    });
+    // Standard levels above the "Others" separator; Custom + Create-game
+    // sit below. Legacy LEVELS aliases (EASY/MEDIUM/HARDPLUS) are not
+    // included — they exist only for backwards-compat with old game IDs.
+    const items = [
+        LEVELS.CLASSIC,
+        LEVELS.HARD,
+        LEVELS.EXTREME,
+        { separator: 'Others' },
+        LEVELS.CUSTOM,
+        LEVELS.MYCODE,
+    ];
+    ui.wireClassicStepper({ min: 3, max: 7, initial: 5 });
+    ui.renderLevelSelect(items,
+        (lvId) => {
+            if (lvId === 'CUSTOM')       game.openCustomLevelModal();
+            else if (lvId === 'MYCODE')  game.openMyCodeModal();
+            else if (lvId === 'CLASSIC') game.startNew('CLASSIC', undefined,
+                                            { verifiers: ui.getClassicVerifiers() });
+            else                         game.startNew(lvId);
+        },
+        (lvId) => game.openLevelInfo(lvId),
+        () => {
+            ui.showScreen('main');
+            game.refreshMainMenu();
+        });
 
     // Initial screen + menu state.
     ui.showScreen('main');

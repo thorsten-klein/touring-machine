@@ -105,12 +105,14 @@ const CARDS = [
     { id:13, topic:'Yellow vs Purple', family:'cmpYP', options: cmpTwoColors(COLOR.YELLOW, COLOR.PURPLE) },
 
     // --- 14-15: which color is strictly smallest ---
-    { id:14, topic:'Which color is strictly the smallest', family:'minColor', options:[
+    // Marked colorParam: each option fixes the same predicate on a different
+    // color slot. The HARD+ level draws exclusively from this family.
+    { id:14, topic:'Which color is strictly the smallest', family:'minColor', colorParam: true, options:[
         { label:'Blue is smallest',   test: c => c[0] < c[1] && c[0] < c[2] },
         { label:'Yellow is smallest', test: c => c[1] < c[0] && c[1] < c[2] },
         { label:'Purple is smallest', test: c => c[2] < c[0] && c[2] < c[1] },
     ]},
-    { id:15, topic:'Which color is strictly the greatest', family:'maxColor', options:[
+    { id:15, topic:'Which color is strictly the greatest', family:'maxColor', colorParam: true, options:[
         { label:'Blue is greatest',   test: c => c[0] > c[1] && c[0] > c[2] },
         { label:'Yellow is greatest', test: c => c[1] > c[0] && c[1] > c[2] },
         { label:'Purple is greatest', test: c => c[2] > c[0] && c[2] > c[1] },
@@ -199,60 +201,59 @@ const CARDS = [
     ]},
 
     // --- 26-27: a color is less than 3 (which color?) ---
-    { id:26, topic:'A specific color is less than 3', family:'lt3', options:[
+    { id:26, topic:'A specific color is less than 3', family:'lt3', colorParam: true, options:[
         { label:'Blue < 3',   test: c => c[0] < 3 },
         { label:'Yellow < 3', test: c => c[1] < 3 },
         { label:'Purple < 3', test: c => c[2] < 3 },
     ]},
-    { id:27, topic:'A specific color is greater than 3', family:'gt3', options:[
+    { id:27, topic:'A specific color is greater than 3', family:'gt3', colorParam: true, options:[
         { label:'Blue > 3',   test: c => c[0] > 3 },
         { label:'Yellow > 3', test: c => c[1] > 3 },
         { label:'Purple > 3', test: c => c[2] > 3 },
     ]},
 
     // --- 28-30: a color equals 1 ---
-    { id:28, topic:'A specific color equals 1', family:'eq1', options:[
+    { id:28, topic:'A specific color equals 1', family:'eq1', colorParam: true, options:[
         { label:'Blue = 1',   test: c => c[0] === 1 },
         { label:'Yellow = 1', test: c => c[1] === 1 },
         { label:'Purple = 1', test: c => c[2] === 1 },
     ]},
-    { id:29, topic:'A specific color equals 3', family:'eq3', options:[
+    { id:29, topic:'A specific color equals 3', family:'eq3', colorParam: true, options:[
         { label:'Blue = 3',   test: c => c[0] === 3 },
         { label:'Yellow = 3', test: c => c[1] === 3 },
         { label:'Purple = 3', test: c => c[2] === 3 },
     ]},
-    { id:30, topic:'A specific color equals 4', family:'eq4', options:[
+    { id:30, topic:'A specific color equals 4', family:'eq4', colorParam: true, options:[
         { label:'Blue = 4',   test: c => c[0] === 4 },
         { label:'Yellow = 4', test: c => c[1] === 4 },
         { label:'Purple = 4', test: c => c[2] === 4 },
     ]},
 
-    // --- 31-32: a color is greater than 1 / less than 4 ---
-    { id:31, topic:'A specific color is greater than 1', family:'gt1', options:[
-        { label:'Blue > 1',   test: c => c[0] > 1 },
-        { label:'Yellow > 1', test: c => c[1] > 1 },
-        { label:'Purple > 1', test: c => c[2] > 1 },
-    ]},
-    { id:32, topic:'A specific color is less than 4', family:'lt4', options:[
+    // --- 32: a color is less than 4 ---
+    // (id 31 "specific color > 1" was removed — once deduced, it pins
+    // that color to {2..max} which combined with other constraints
+    // tends to reveal a single value almost immediately. Keep only the
+    // less-trivial directional cards.)
+    { id:32, topic:'A specific color is less than 4', family:'lt4', colorParam: true, options:[
         { label:'Blue < 4',   test: c => c[0] < 4 },
         { label:'Yellow < 4', test: c => c[1] < 4 },
         { label:'Purple < 4', test: c => c[2] < 4 },
     ]},
 
     // --- 33: parity of a specific color (which color?) ---
-    { id:33, topic:'A specific color is even', family:'even', options:[
+    { id:33, topic:'A specific color is even', family:'even', colorParam: true, options:[
         { label:'Blue is even',   test: c => c[0]%2 === 0 },
         { label:'Yellow is even', test: c => c[1]%2 === 0 },
         { label:'Purple is even', test: c => c[2]%2 === 0 },
     ]},
 
     // --- 34-35: a color is min / max (≤ / ≥ the others) ---
-    { id:34, topic:'A specific color ≤ the others (a smallest one)', family:'leAll', options:[
+    { id:34, topic:'A specific color ≤ the others (a smallest one)', family:'leAll', colorParam: true, options:[
         { label:'Blue ≤ Yellow and Blue ≤ Purple',   test: c => c[0] <= c[1] && c[0] <= c[2] },
         { label:'Yellow ≤ Blue and Yellow ≤ Purple', test: c => c[1] <= c[0] && c[1] <= c[2] },
         { label:'Purple ≤ Blue and Purple ≤ Yellow', test: c => c[2] <= c[0] && c[2] <= c[1] },
     ]},
-    { id:35, topic:'A specific color ≥ the others (a greatest one)', family:'geAll', options:[
+    { id:35, topic:'A specific color ≥ the others (a greatest one)', family:'geAll', colorParam: true, options:[
         { label:'Blue ≥ Yellow and Blue ≥ Purple',   test: c => c[0] >= c[1] && c[0] >= c[2] },
         { label:'Yellow ≥ Blue and Yellow ≥ Purple', test: c => c[1] >= c[0] && c[1] >= c[2] },
         { label:'Purple ≥ Blue and Purple ≥ Yellow', test: c => c[2] >= c[0] && c[2] >= c[1] },
@@ -283,7 +284,7 @@ const CARDS = [
     { id:41, topic:'Purple vs 1', family:'cmp_purple_1', options: cmp(COLOR.PURPLE, 1) },
 
     // --- 42: a color is strictly greater or strictly less than both others ---
-    { id:42, topic:'A specific color is the strict extremum', family:'extrColor', options:[
+    { id:42, topic:'A specific color is the strict extremum', family:'extrColor', colorParam: true, options:[
         { label:'Blue is strictly greater than the others',
           test: c => c[0] > c[1] && c[0] > c[2] },
         { label:'Yellow is strictly greater than the others',
@@ -322,7 +323,99 @@ const CARDS = [
         { label:'Yellow + Purple = 6', test: c => c[1]+c[2] === 6 },
         { label:'Yellow + Purple > 6', test: c => c[1]+c[2] >  6 },
     ]},
+
+    // --- 50-53: HARD+ color-pair templates. All carry colorParam. The
+    // 1-● Ask rule still applies — proposals must isolate a single option
+    // across the card before the verifier can be asked, same as every
+    // other card. (Cards whose options are inherently never isolable have
+    // been omitted from the pool — e.g. "Color1 > Color2" with 6 directed
+    // pairs always activates multiple options at once.)
+    { id:50, topic:'Two specific colors are equal',
+      family:'pairEq', colorParam: true, options:[
+        { label:'Blue = Yellow',   test: c => c[0] === c[1] },
+        { label:'Blue = Purple',   test: c => c[0] === c[2] },
+        { label:'Yellow = Purple', test: c => c[1] === c[2] },
+    ]},
+    { id:51, topic:'A specific color is exactly 1 greater than another',
+      family:'pairPlus1', colorParam: true, options:[
+        { label:'Blue = Yellow + 1', test: c => c[0] === c[1] + 1 },
+        { label:'Blue = Purple + 1', test: c => c[0] === c[2] + 1 },
+        { label:'Yellow = Blue + 1', test: c => c[1] === c[0] + 1 },
+        { label:'Yellow = Purple + 1', test: c => c[1] === c[2] + 1 },
+        { label:'Purple = Blue + 1', test: c => c[2] === c[0] + 1 },
+        { label:'Purple = Yellow + 1', test: c => c[2] === c[1] + 1 },
+    ]},
+    { id:52, topic:'A specific color equals the sum of the other two',
+      family:'colorIsSum', colorParam: true, options:[
+        { label:'Blue = Yellow + Purple',   test: c => c[0] === c[1] + c[2] },
+        { label:'Yellow = Blue + Purple',   test: c => c[1] === c[0] + c[2] },
+        { label:'Purple = Blue + Yellow',   test: c => c[2] === c[0] + c[1] },
+    ]},
+    { id:53, topic:'A specific color is odd while the other two are even',
+      family:'colorLoneOdd', colorParam: true, options:[
+        { label:'Blue is odd, the other two are even',
+          test: c => c[0]%2===1 && c[1]%2===0 && c[2]%2===0 },
+        { label:'Yellow is odd, the other two are even',
+          test: c => c[0]%2===0 && c[1]%2===1 && c[2]%2===0 },
+        { label:'Purple is odd, the other two are even',
+          test: c => c[0]%2===0 && c[1]%2===0 && c[2]%2===1 },
+    ]},
+
 ];
+
+// --- HARD-level OR-combo cards (constructed, not hand-written) --------------
+// At pool-rebuild time we synthesise a combo card for every (unordered) pair
+// of HAND-WRITTEN, non-hardplusOnly source cards. Each combo unions the two
+// sources' option lists; the criterion is one option from the union. The
+// Hard level draws exclusively from these — the player sees a slot that
+// asks one of two distinct rules and must work out which one.
+//
+// Combos carry:
+//   • multiOption: true   — relaxed Ask rule + isValidPuzzle "one option
+//                           matches solution" skip (both halves may match)
+//   • hardplusOnly: true  — keeps Classic / Extreme / Custom pools clean
+//   • comboSrcA / comboSrcB — source-card ids (used by the level-info modal)
+//
+// The combo id encodes the source pair (id = 100000 + minId*1000 + maxId)
+// so encoded game ids round-trip without ambiguity. Source ids stay small
+// enough that the formula doesn't collide with scaling-card ids (1000+).
+function comboCardId(srcA, srcB) {
+    const a = Math.min(srcA, srcB), b = Math.max(srcA, srcB);
+    return 100000 + a * 1000 + b;
+}
+function generateComboCards(sourceCards) {
+    // Only the hand-written cards (id < 1000) are eligible as combo sources
+    // — scaling cards would multiply the combo pool by ~30 and slow puzzle
+    // generation to a crawl. The Hard pool ends up at ~C(N, 2) combos for N
+    // hand-written cards, which sits in the low-thousands and is fine.
+    const eligible = sourceCards.filter(c => c.id < 1000 && !c.hardplusOnly);
+    const out = [];
+    for (let i = 0; i < eligible.length; i++) {
+        for (let j = i + 1; j < eligible.length; j++) {
+            const a = eligible[i], b = eligible[j];
+            // Skip pairs whose option lists overlap — the union would
+            // list the same criterion twice (e.g. "Blue < 3" appears in
+            // both "Blue compared to 3" and "A specific color is less
+            // than 3"), which reads as a bug to the player.
+            const labelsA = new Set(a.options.map(o => o.label));
+            if (b.options.some(o => labelsA.has(o.label))) continue;
+            out.push({
+                id: comboCardId(a.id, b.id),
+                topic: `${a.topic}  /  ${b.topic}`,
+                family: `combo_${a.id}_${b.id}`,
+                multiOption: true,
+                hardplusOnly: true,
+                comboSrcA: a.id,
+                comboSrcB: b.id,
+                options: [
+                    ...a.options.map(o => ({ label: o.label, test: o.test })),
+                    ...b.options.map(o => ({ label: o.label, test: o.test })),
+                ],
+            });
+        }
+    }
+    return out;
+}
 
 // The unpruned card data — never mutated. `CARDS` (below) is a working copy
 // that gets re-derived from this every time the digit range changes, so
@@ -394,6 +487,10 @@ function rebuildCardsForCurrentConfig() {
         }
         rebuilt.push({ ...orig, options: opts });
     }
+    // Synthesised Hard+ combo cards: union the option lists of pre-defined
+    // pairs of easier cards. Run AFTER admissibility pruning so combos use
+    // the same surviving options the rest of the game sees.
+    rebuilt.push(...generateComboCards(rebuilt));
     CARDS.length = 0;
     CARDS.push(...rebuilt);
     CARDS_BY_ID = Object.fromEntries(CARDS.map(c => [c.id, c]));

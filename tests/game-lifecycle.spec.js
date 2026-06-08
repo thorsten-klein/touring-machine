@@ -9,7 +9,7 @@ test('main-menu → easy game → ask → end-round → submit → end → repla
 
     await page.click('#btn-start-game');
     await expect(page.locator('#screen-level')).toBeVisible();
-    await page.click('#level-options .level-option:has(strong:text("Easy"))');
+    await page.click('#level-options .level-option:has(strong:text("Classic"))');
     await expect(page.locator('#screen-game')).toBeVisible();
 
     // Drive every dial (covers onProposalChange + updateVerifierPreviews).

@@ -43,6 +43,9 @@
             <button id="btn-share" class="topbar-btn" title="Share this puzzle" hidden>
                 <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><line x1="8.6" y1="10.6" x2="15.4" y2="7.4"/><line x1="8.6" y1="13.4" x2="15.4" y2="16.6"/></svg>
             </button>
+            <button id="btn-settings" class="topbar-btn" title="Settings">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </button>
             <button id="btn-info" class="topbar-btn" title="Rules">
                 <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="11"/><circle cx="12" cy="8" r="0.5" fill="currentColor"/></svg>
             </button>
@@ -82,7 +85,14 @@
         <div id="screen-level" class="screen hidden">
             <div class="screen-content">
                 <h2 class="subtitle">Select Difficulty</h2>
-                <p class="level-subtitle">More verifiers = a harder puzzle.</p>
+                <div id="classic-stepper" class="classic-stepper">
+                    <div class="cv-label">Classic verifiers</div>
+                    <div class="cv-controls">
+                        <button id="btn-cv-dec" class="dial-step" aria-label="fewer verifiers">−</button>
+                        <span id="cv-count" class="cv-count">5</span>
+                        <button id="btn-cv-inc" class="dial-step" aria-label="more verifiers">+</button>
+                    </div>
+                </div>
                 <div id="level-options" class="menu-buttons vertical"></div>
             </div>
             <div class="menu-buttons">
@@ -127,7 +137,13 @@
                 </section>
 
                 <div id="game-controls">
-                    <button id="btn-end-round" class="ctrl-btn">End round →</button>
+                    <button id="btn-end-round" class="ctrl-btn">
+                        <svg class="btn-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="10"/>
+                            <rect x="9" y="9" width="6" height="6"/>
+                        </svg>
+                        <span class="btn-label">End round</span>
+                    </button>
                     <button id="btn-submit-code" class="ctrl-btn primary">Submit code</button>
                     <button id="btn-give-up" class="ctrl-btn danger">Give up</button>
                 </div>
@@ -138,6 +154,10 @@
         <div id="screen-end" class="screen hidden v-center">
             <div class="end-content-container">
                 <h2 id="end-title" class="subtitle"></h2>
+                <div id="end-solution-block">
+                    <p id="end-solution-label">The code was:</p>
+                    <div id="end-solution-row"></div>
+                </div>
                 <p id="end-stats"></p>
                 <div id="end-expected" class="end-expected" hidden>
                     <span class="exp-label">Expected average</span>
@@ -149,10 +169,6 @@
                     <div id="end-rank-flavor" class="rank-flavor"></div>
                     <div id="end-rank-score" class="rank-score"></div>
                     <ol id="end-rank-ladder" class="rank-ladder"></ol>
-                </div>
-                <div id="end-solution-block">
-                    <p id="end-solution-label">The code was:</p>
-                    <div id="end-solution-row"></div>
                 </div>
                 <div id="end-criteria-block">
                     <h3 class="section-title">The verifiers' criteria</h3>
@@ -279,6 +295,12 @@
             </ol>
             <p>When you think you've identified <em>all</em> criteria, work out the unique code that satisfies them all, and press <strong>Submit code</strong>. Fewer total questions = better score.</p>
             <p class="hint">There is always exactly one code that satisfies every criterion, and no verifier is superfluous — you need all of them.</p>
+            <h4>Hard+</h4>
+            <p>In <strong>Hard+</strong> you face 5 verifiers drawn from the full rule pool, with <strong>at least 3</strong> of them being <em>"which color does X?"</em> templates — e.g. "<strong>A specific color is the sum of the other two</strong>" with options <em>Blue = Yellow + Purple / Yellow = Blue + Purple / Purple = Blue + Yellow</em>. The puzzle picks which color is the real one. For those color-rules, Ask works on <em>any</em> proposal (even when 0 or many options match) — the verifier just answers YES or NO, and the system only auto-marks options when exactly one of the card's options matches your number.</p>
+            <h4>Extreme mode</h4>
+            <p>In <strong>Extreme</strong> games each verifier shows <strong>two</strong> criteria cards — but the verifier only tests <em>one</em> of them. You have to deduce both which card is the active one AND which option on that card is the real criterion. The Ask rule still applies across both cards together: you can only Ask when exactly one option across the entire verifier matches your number.</p>
+            <p>And there's a twist: <strong>one extra verifier</strong> in the lineup is a <strong>red herring</strong> — its hidden criterion was deliberately chosen to NOT match the true code, so it always answers NO on the actual solution. You don't know which slot is the herring. Use your queries to spot the verifier whose answers contradict the rest, and ignore it.</p>
+            <p class="hint">Auto-deduction in Extreme is intentionally quieter: a card is marked dead (<strong>⊘</strong>) only once every one of its options is ruled out, and an option is auto-confirmed only when it's the last possibility across <em>both</em> cards combined.</p>
         </div>
         <div class="menu-buttons">
             <button id="btn-close-rules" class="btn-back">Close</button>
@@ -299,6 +321,95 @@
     </div>
 </div>
 
+<!-- Round-detail modal — opened by clicking a "Round N" tag in a verifier
+     card's vqlog. Shows the asked number with live arrow + verifier-card
+     snapshot of how this verifier looked AFTER that round. -->
+<div id="round-detail-modal" class="modal hidden">
+    <div class="modal-content">
+        <h3 id="round-detail-title">Round detail</h3>
+        <p class="hint" id="round-detail-subtitle"></p>
+        <div id="round-detail-proposal" class="rd-proposal"></div>
+        <div id="round-detail-card"></div>
+        <div class="menu-buttons">
+            <button id="btn-close-round-detail" class="btn-back">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Expected-effort modal — opened by clicking the level name in the game header. -->
+<div id="expected-modal" class="modal hidden">
+    <div class="modal-content">
+        <h3>Expected effort</h3>
+        <p class="hint" id="expected-subtitle"></p>
+        <ul class="expected-list">
+            <li class="expected-row">
+                <span class="expected-label">Minimum questions (info-theoretic floor)</span>
+                <span class="expected-val" id="expected-min-q">—</span>
+            </li>
+            <li class="expected-row">
+                <span class="expected-label">Typical questions (≈40% wasted on suboptimal probes)</span>
+                <span class="expected-val" id="expected-exp-q">—</span>
+            </li>
+            <li class="expected-row">
+                <span class="expected-label">Minimum rounds</span>
+                <span class="expected-val" id="expected-min-r">—</span>
+            </li>
+            <li class="expected-row highlight">
+                <span class="expected-label">Typical rounds to solve</span>
+                <span class="expected-val" id="expected-exp-r">—</span>
+            </li>
+        </ul>
+        <p class="hint" id="expected-formula"></p>
+        <div class="menu-buttons">
+            <button id="btn-close-expected" class="btn-back">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Settings modal — opened from the gear icon in the topbar. -->
+<div id="settings-modal" class="modal hidden">
+    <div class="modal-content">
+        <h3>Settings</h3>
+        <ul class="settings-list">
+            <li class="settings-row">
+                <label for="set-auto-deduce" class="settings-label">
+                    <strong>Auto-deduction markers</strong>
+                    <span class="hint">Show a box before each verifier option line. A ✓/✗ badge is shown there to hint that past queries lead to this unambigous deduction. Turn off if you want to do all the deducing yourself.</span>
+                </label>
+                <label class="toggle-switch" title="Toggle auto-deduction markers">
+                    <input id="set-auto-deduce" type="checkbox">
+                    <span class="toggle-slider"></span>
+                </label>
+            </li>
+            <li class="settings-row">
+                <label for="set-preview-arrow" class="settings-label">
+                    <strong>Live preview arrow</strong>
+                    <span class="hint">Show a yellow ← arrow next to every verifier option your current number satisfies. Lets you see at a glance which option would be the ● if you Asked now.</span>
+                </label>
+                <label class="toggle-switch" title="Toggle live preview arrow">
+                    <input id="set-preview-arrow" type="checkbox">
+                    <span class="toggle-slider"></span>
+                </label>
+            </li>
+        </ul>
+        <div class="menu-buttons">
+            <button id="btn-close-settings" class="btn-back">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Level-info modal — opened from the magnifier on each level option. -->
+<div id="level-info-modal" class="modal hidden">
+    <div class="modal-content level-info-content">
+        <h3 id="level-info-title"></h3>
+        <p class="hint" id="level-info-subtitle"></p>
+        <div id="level-info-body"></div>
+        <div class="menu-buttons">
+            <button id="btn-close-level-info" class="btn-back">Close</button>
+        </div>
+    </div>
+</div>
+
 <!-- Give-up confirmation modal -->
 <div id="giveup-modal" class="modal hidden">
     <div class="modal-content">
@@ -307,6 +418,38 @@
         <div class="menu-buttons">
             <button id="btn-confirm-giveup" class="danger">Give up</button>
             <button id="btn-cancel-giveup" class="btn-back">Keep playing</button>
+        </div>
+    </div>
+</div>
+
+<!-- "Create game for my number" modal — pick a target code AND a level
+     (Classic/Hard/Extreme); generator produces a puzzle whose unique
+     solution equals that code so the creator can share the game id. -->
+<div id="mycode-modal" class="modal hidden">
+    <div class="modal-content">
+        <h3>Create game for my number</h3>
+        <p class="hint">Choose a code and a level. The puzzle generated will have YOUR code as the unique solution — share the game ID so friends play your puzzle.</p>
+        <div id="mycode-dials" class="dials-row"></div>
+        <div class="mycode-level-pick">
+            <label class="mycode-lv"><input type="radio" name="mycode-level" value="CLASSIC" checked> Classic</label>
+            <label class="mycode-lv"><input type="radio" name="mycode-level" value="HARD"> Hard</label>
+            <label class="mycode-lv"><input type="radio" name="mycode-level" value="EXTREME"> Extreme</label>
+        </div>
+        <div id="mycode-classic-stepper" class="classic-stepper">
+            <div class="cv-label">Classic verifiers</div>
+            <div class="cv-controls">
+                <button id="btn-mc-cv-dec" class="dial-step" aria-label="fewer verifiers">−</button>
+                <span id="mc-cv-count" class="cv-count">5</span>
+                <button id="btn-mc-cv-inc" class="dial-step" aria-label="more verifiers">+</button>
+            </div>
+        </div>
+        <div id="mycode-status-row" class="custom-status-row">
+            <span id="mycode-spinner" class="spinner" hidden></span>
+            <p id="mycode-status" class="custom-status"></p>
+        </div>
+        <div class="menu-buttons">
+            <button id="btn-mycode-start" class="primary">Create &amp; play</button>
+            <button id="btn-mycode-cancel" class="btn-back">Cancel</button>
         </div>
     </div>
 </div>
@@ -347,6 +490,14 @@
                     <button class="dial-step" data-cfg="questionsPerRound" data-delta="-1">−</button>
                     <span class="stepper-val" id="cfg-qpr">3</span>
                     <button class="dial-step" data-cfg="questionsPerRound" data-delta="1">+</button>
+                </div>
+            </div>
+            <div class="stepper-row">
+                <div class="stepper-label">Extreme mode</div>
+                <div class="stepper-controls">
+                    <button class="dial-step" data-cfg="extreme" data-delta="-1">−</button>
+                    <span class="stepper-val" id="cfg-extreme">off</span>
+                    <button class="dial-step" data-cfg="extreme" data-delta="1">+</button>
                 </div>
             </div>
         </div>

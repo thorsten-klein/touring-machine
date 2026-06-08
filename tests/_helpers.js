@@ -21,16 +21,19 @@ export async function startCustomGame(page, cfg, seed = 7) {
 }
 
 // Find a proposal that makes verifier `vi` "askable" (exactly one option
-// active for the current proposal). Sets state.proposal and re-renders.
-// Returns true on success, false if no such proposal exists for this verifier.
+// active for the current proposal). In extreme mode the 1-● rule spans both
+// panes, so we count over both cards' options. Sets state.proposal and
+// re-renders. Returns true on success, false if no such proposal exists for
+// this verifier.
 export async function makeAskable(page, vi = 0) {
     return page.evaluate((vi) => {
         const p = window.game.state.puzzle;
-        const def = CARDS_BY_ID[p.cards[vi].id];
+        const panes = paneListOf(p.cards[vi]);
+        const allOpts = panes.flatMap(pane => CARDS_BY_ID[pane.id].options);
         for (let a = GAME_CONFIG.digitMin; a <= GAME_CONFIG.digitMax; a++)
         for (let b = GAME_CONFIG.digitMin; b <= GAME_CONFIG.digitMax; b++)
         for (let c = GAME_CONFIG.digitMin; c <= GAME_CONFIG.digitMax; c++) {
-            const n = def.options.filter(o => o.test([a, b, c])).length;
+            const n = allOpts.filter(o => o.test([a, b, c])).length;
             if (n === 1) {
                 window.game.state.proposal = [a, b, c];
                 window.game.renderAll();

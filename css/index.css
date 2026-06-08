@@ -246,7 +246,11 @@ body {
     cursor: pointer;
     transition: all 0.18s ease;
     font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
 }
+.ctrl-btn .btn-icon { flex-shrink: 0; }
 .menu-buttons button:hover,
 .ctrl-btn:hover {
     background: var(--surface-2);
@@ -295,10 +299,96 @@ body {
     box-shadow: none;
 }
 
+/* Classic-verifiers stepper above the level options. */
+.classic-stepper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.9rem;
+    background: var(--surface-elev);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.55rem 0.9rem;
+    margin: 0.4rem auto 0.85rem;
+    max-width: 380px;
+}
+.classic-stepper .cv-label {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.classic-stepper .cv-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.classic-stepper .cv-count {
+    min-width: 1.6em;
+    text-align: center;
+    font-family: var(--font-display);
+    font-size: 1.4rem;
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+/* Section separator in the level-options list (e.g. "Others" between
+   the standard levels and the custom / create-game-for-my-number ones). */
+.level-section-sep {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0.4rem 0 0.2rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 1.5px;
+    font-family: var(--font-display);
+}
+.level-section-sep .sep-line {
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--border-color);
+}
+.level-section-sep .sep-label { white-space: nowrap; }
+
+/* "Create game for my number" modal layout — dial row + level picker. */
+#mycode-dials {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin: 0.6rem 0;
+    flex-wrap: wrap;
+}
+.mycode-level-pick {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    margin: 0.4rem 0 0.6rem;
+    flex-wrap: wrap;
+}
+.mycode-level-pick .mycode-lv {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    cursor: pointer;
+    color: var(--text-color);
+    font-size: 0.95rem;
+}
+.mycode-level-pick .mycode-lv input { accent-color: var(--primary-color); }
+#mycode-classic-stepper { margin: 0.4rem auto; }
+
 /* level option cards on level select */
 .level-option {
     text-align: left;
     padding: 0.85rem 1.1rem !important;
+    position: relative;
+    padding-right: 2.6rem !important;
+    /* Override .menu-buttons button's inline-flex row layout so the
+       <strong> label and <span> description stack vertically. */
+    display: flex !important;
+    flex-direction: column;
+    align-items: stretch;
 }
 .level-option strong {
     display: block;
@@ -306,9 +396,130 @@ body {
     color: var(--primary-color);
     margin-bottom: 0.2rem;
 }
-.level-option span {
+.level-option span:not(.level-info-icon) {
+    display: block;
     color: var(--text-muted);
     font-size: 0.88rem;
+    line-height: 1.35;
+    text-align: center;
+}
+/* Magnifier icon on the right of each level option. Acts as its own
+   click target — stops propagation so it doesn't start the game. */
+.level-info-icon {
+    position: absolute;
+    top: 50%;
+    right: 0.7rem;
+    transform: translateY(-50%);
+    width: 28px; height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: var(--text-muted);
+    background: transparent;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.level-info-icon:hover {
+    background: rgba(0, 212, 170, 0.12);
+    color: var(--primary-color);
+}
+
+/* Level-info modal: list of every verifier card available in the level. */
+.level-info-content {
+    max-width: 760px;
+    width: 90vw;
+    max-height: 86vh;
+    display: flex;
+    flex-direction: column;
+}
+#level-info-body {
+    overflow-y: auto;
+    flex: 1 1 auto;
+    margin-top: 0.4rem;
+    padding-right: 0.25rem;
+}
+.level-info-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    counter-reset: lvcard;
+}
+.lvcard-num {
+    font-family: var(--font-display);
+    color: var(--text-muted);
+    font-weight: 700;
+    min-width: 1.7em;
+    text-align: right;
+    flex-shrink: 0;
+}
+.lvcard {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.5rem 0.7rem;
+    background: var(--surface-elev);
+}
+.lvcard-body {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.lvcard-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 0.3rem;
+}
+.lvcard-topic {
+    color: var(--primary-color);
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+.lvtag {
+    font-family: var(--font-display);
+    font-size: 0.62rem;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+}
+.lvtag-multi { background: rgba(255, 213, 79, 0.15); color: var(--color-yellow); }
+.lvtag-hp    { background: rgba(255, 100, 100, 0.18); color: var(--fail-color); }
+
+/* Inline "color" placeholder on colorParam cards in the level-info modal —
+   visually distinct so the player reads the rule as parametric over color. */
+.color-placeholder {
+    display: inline-block;
+    font-family: var(--font-display);
+    font-size: 0.78em;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    background: linear-gradient(90deg,
+        var(--color-blue) 0%, var(--color-blue) 33%,
+        var(--color-yellow) 33%, var(--color-yellow) 66%,
+        var(--color-purple) 66%, var(--color-purple) 100%);
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    font-weight: 700;
+    padding: 0 0.15em;
+    border: 1px dashed var(--border-color);
+    border-radius: 3px;
+    vertical-align: 0;
+}
+.lvcard-opts {
+    list-style: disc;
+    margin: 0;
+    padding-left: 1.2rem;
+    color: var(--text-color);
+    font-size: 0.86rem;
+    line-height: 1.5;
 }
 
 /* --- Game Screen --- */
@@ -330,7 +541,34 @@ body {
     gap: 0.5rem;
 }
 #game-info .sep { margin: 0 0.5rem; color: var(--text-dim); }
-#info-level    { color: var(--accent-color); font-weight: 600; }
+#info-level    { color: var(--accent-color); font-weight: 600; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 0.18em; }
+#info-level:hover { color: var(--primary-color); }
+
+/* Expected-effort modal: 2-column rows of label + value, like a stat sheet. */
+.expected-list {
+    list-style: none;
+    padding: 0;
+    margin: 0.6rem 0 0.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+.expected-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--surface-elev);
+}
+.expected-row.highlight {
+    border-color: var(--primary-color);
+    background: rgba(0, 212, 170, 0.08);
+}
+.expected-label { color: var(--text-muted); font-size: 0.88rem; }
+.expected-val   { color: var(--text-color); font-weight: 700; font-family: var(--font-display); }
 #info-round    { color: var(--primary-color); font-weight: 600; }
 #info-questions { color: var(--text-color); }
 
@@ -420,7 +658,14 @@ body {
     color: var(--bg-color);
     border-color: var(--primary-color);
 }
-.verifier-card .vbtn:disabled { opacity: 0.4; cursor: not-allowed; }
+.verifier-card .vbtn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    /* Keep hover events firing so the native `title` tooltip showing
+       WHY the button is disabled actually appears (some browsers
+       suppress mouseover on disabled buttons entirely). */
+    pointer-events: auto;
+}
 
 .verifier-card .voptions {
     list-style: none;
@@ -472,6 +717,148 @@ body {
 .color-dot.blue   { background: var(--color-blue); }
 .color-dot.yellow { background: var(--color-yellow); }
 .color-dot.purple { background: var(--color-purple); }
+
+/* Proposal chip rows (vqlog, notes table, deduction modal): a colored
+   dot tagging each color slot, no separator between slots. */
+.proposal-chips { display: inline-flex; gap: 0.45rem; align-items: baseline; }
+.proposal-chips .pchip { display: inline-flex; gap: 0.15rem; align-items: baseline; }
+
+/* Settings modal — list of toggleable settings. */
+.settings-list {
+    list-style: none;
+    padding: 0;
+    margin: 0.6rem 0 0.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+.settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.9rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--surface-elev);
+}
+.settings-label { flex: 1 1 auto; cursor: pointer; }
+.settings-label strong { display: block; color: var(--text-color); margin-bottom: 0.15rem; }
+.settings-label .hint  { display: block; color: var(--text-muted); font-size: 0.82rem; }
+/* iOS-style slider toggle. The native checkbox is visually hidden but
+   still focusable — keyboard users can tab to it and toggle with space. */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 46px;
+    height: 26px;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+.toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: var(--surface-2);
+    border: 1px solid var(--border-color);
+    border-radius: 26px;
+    transition: background 0.2s, border-color 0.2s;
+}
+.toggle-slider::before {
+    content: '';
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    left: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--text-dim);
+    border-radius: 50%;
+    transition: transform 0.2s ease, background 0.2s;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.toggle-switch input:checked + .toggle-slider {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+}
+.toggle-switch input:checked + .toggle-slider::before {
+    transform: translate(20px, -50%);
+    background: #fff;
+}
+.toggle-switch input:focus-visible + .toggle-slider {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+/* OR divider between the two halves of a combo card's option list. */
+.verifier-card .vopt-or-sep {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0.2rem 0;
+    padding: 0 0.25rem;
+    cursor: default;
+    user-select: none;
+}
+.verifier-card .vopt-or-sep .or-sep-line {
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--border-color);
+}
+.verifier-card .vopt-or-sep .or-sep-label {
+    font-family: var(--font-display);
+    font-size: 0.72rem;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+    background: rgba(0, 212, 170, 0.08);
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    padding: 0.05rem 0.45rem;
+}
+
+/* Hand-set user marker — clickable checkbox on the LEFT of each option,
+   in front of the auto-deduction marker. Cycles empty → ✓ → ✗ → ?. */
+.verifier-card .vopt .user-marker {
+    width: 16px; height: 16px;
+    border: 1.5px solid var(--text-dim);
+    border-radius: 3px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.78rem;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--text-color);
+    background: rgba(0, 0, 0, 0.18);
+    user-select: none;
+    transition: transform 0.1s ease, background 0.15s;
+}
+.verifier-card .vopt .user-marker:hover {
+    transform: scale(1.18);
+    background: rgba(255, 255, 255, 0.06);
+}
+.verifier-card .vopt .user-marker.um-check {
+    color: var(--ok-color);
+    border-color: var(--ok-color);
+    background: rgba(0, 212, 170, 0.12);
+}
+.verifier-card .vopt .user-marker.um-cross {
+    color: var(--fail-color);
+    border-color: var(--fail-color);
+    background: rgba(255, 100, 100, 0.12);
+}
+.verifier-card .vopt .user-marker.um-question {
+    color: var(--color-yellow);
+    border-color: var(--color-yellow);
+    background: rgba(255, 213, 79, 0.12);
+    font-weight: 700;
+}
 
 .verifier-card .vopt .marker {
     width: 14px; height: 14px;
@@ -525,6 +912,162 @@ body {
 .verifier-card .vqlog .ok   { color: var(--ok-color); }
 .verifier-card .vqlog .fail { color: var(--fail-color); }
 .verifier-card .vqlog .vqlog-rule { color: var(--text-color); }
+.verifier-card .vqlog .vqlog-round {
+    cursor: pointer;
+    color: var(--primary-color);
+    text-decoration: underline dotted;
+    text-underline-offset: 0.18em;
+}
+.verifier-card .vqlog .vqlog-round:hover { color: var(--accent-color); }
+
+/* Round-detail modal — proposal up top, verifier-card snapshot below. */
+.rd-proposal {
+    font-family: var(--font-display);
+    font-size: 1.6rem;
+    text-align: center;
+    margin: 0.6rem 0 0.4rem;
+}
+.rd-proposal .proposal-chips { font-size: 1em; }
+.rd-topic {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-align: center;
+    margin: 0.4rem 0;
+}
+#round-detail-card {
+    display: flex;
+    justify-content: center;
+    padding: 0.4rem 0;
+}
+/* Snapshot is read-only — disable the cursor: pointer / hover scaling on
+   user-markers and auto-markers so the modal doesn't look interactive. */
+.rd-snapshot .user-marker,
+.rd-snapshot .marker { cursor: default; pointer-events: none; }
+.rd-snapshot .user-marker:hover,
+.rd-snapshot .marker:hover { transform: none; background: inherit; }
+.rd-snapshot { width: auto; }
+
+/* --- Extreme mode verifier layout --- */
+/* Each extreme verifier wraps its TWO competing cards in .vcard-panes; each
+   pane gets its own topic header and options list, separated by a divider so
+   the player can see them as two distinct rules. */
+.verifier-card.extreme .vcard-panes {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+.verifier-card.extreme .vcard-pane {
+    border: 1px dashed var(--border-color);
+    border-radius: 6px;
+    padding: 0.4rem 0.5rem;
+    background: rgba(255, 255, 255, 0.015);
+    position: relative;
+}
+.verifier-card.extreme .vpane-topic {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-bottom: 0.3rem;
+    line-height: 1.25;
+    white-space: nowrap;
+}
+/* Tag in the head explaining the slot is extreme. */
+.verifier-card.extreme .vtopic-extreme {
+    color: var(--text-muted);
+    font-size: 0.74rem;
+    font-style: italic;
+    white-space: normal;
+}
+.verifier-card.extreme .extreme-tag {
+    display: inline-block;
+    font-family: var(--font-display);
+    font-size: 0.65rem;
+    letter-spacing: 1.5px;
+    background: var(--primary-color);
+    color: var(--bg-color);
+    padding: 0.05rem 0.4rem;
+    border-radius: 3px;
+    margin-right: 0.35rem;
+    font-style: normal;
+    vertical-align: 1px;
+}
+/* Dead pane — entire card has been ruled out as the active criterion. */
+.verifier-card.extreme .vcard-pane.pane-dead {
+    background: repeating-linear-gradient(
+        135deg,
+        rgba(255, 255, 255, 0.02),
+        rgba(255, 255, 255, 0.02) 6px,
+        rgba(255, 100, 100, 0.06) 6px,
+        rgba(255, 100, 100, 0.06) 12px);
+    border-style: solid;
+    border-color: rgba(255, 100, 100, 0.35);
+    opacity: 0.72;
+}
+.verifier-card.extreme .vcard-pane.pane-dead .vpane-topic {
+    text-decoration: line-through;
+    color: var(--fail-color);
+}
+.verifier-card.extreme .vcard-pane.pane-dead .vopt-label {
+    color: var(--text-dim);
+}
+/* "Greyed" marker for options on a dead pane that haven't been individually
+   crossed — distinguishes pane-level elimination from per-option elimination. */
+.verifier-card.extreme .vopt.pane-dead-opt .marker {
+    border-color: var(--text-dim);
+    color: var(--text-dim);
+    background: transparent;
+}
+
+/* Pane tag in deduction modal subtitle ("card A" / "card B"). */
+.pane-tag {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    background: rgba(0, 212, 170, 0.15);
+    color: var(--primary-color);
+    padding: 0.05rem 0.35rem;
+    border-radius: 3px;
+}
+
+/* End-screen decoy line under the active criterion. */
+.end-decoy {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 0.15rem;
+    margin-left: 1.3rem;
+    font-style: italic;
+}
+/* End-screen "RED HERRING" tag on the extra Extreme verifier — and the
+   muted explainer that follows. */
+.end-herring .herring-tag {
+    display: inline-block;
+    font-family: var(--font-display);
+    font-size: 0.65rem;
+    letter-spacing: 1.2px;
+    background: rgba(255, 100, 100, 0.22);
+    color: var(--fail-color);
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    margin: 0 0.3rem;
+    vertical-align: 1px;
+}
+.end-herring .herring-note {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.end-decoy .decoy-tag {
+    display: inline-block;
+    font-family: var(--font-display);
+    font-size: 0.62rem;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    background: rgba(255, 100, 100, 0.18);
+    color: var(--fail-color);
+    padding: 0.05rem 0.32rem;
+    border-radius: 3px;
+    font-style: normal;
+    margin-right: 0.35rem;
+    vertical-align: 1px;
+}
 
 /* --- Proposal dials --- */
 #proposal-dials, #submit-dials {
@@ -1206,13 +1749,13 @@ body {
 .stepper-controls {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.5rem;
 }
 .stepper-val {
-    font-family: var(--font-mono);
+    font-family: var(--font-display);
     font-size: 1.4rem;
     font-weight: 600;
-    min-width: 1.6rem;
+    min-width: 1.6em;
     text-align: center;
     color: var(--primary-color);
 }
@@ -1336,11 +1879,20 @@ body {
     border-radius: 6px;
     font-family: var(--font-mono);
     font-size: 0.9rem;
+    flex-wrap: wrap;
 }
 .ev-list .ev-round { color: var(--text-muted); min-width: 4.5rem; }
 .ev-list .ev-arrow { color: var(--text-dim); }
 .ev-list .ev-result.ok   { color: var(--ok-color); font-weight: 700; }
 .ev-list .ev-result.fail { color: var(--fail-color); font-weight: 700; }
+.ev-list .ev-note {
+    flex-basis: 100%;
+    margin-left: 4.6rem;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    font-style: italic;
+    font-family: var(--font-body);
+}
 .elim-list { display: flex; flex-direction: column; gap: 0.55rem; }
 .elim-block {
     padding: 0.4rem 0.5rem;

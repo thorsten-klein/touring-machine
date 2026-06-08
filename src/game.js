@@ -7,15 +7,36 @@ class Game {
     constructor(ui) {
         this.ui = ui;
         this.state = null;
+        // User-toggleable settings (persisted in localStorage across page
+        // reloads via loadSettings/saveSettings in state.js). Loaded once
+        // on construction; the settings modal mutates this object live.
+        this.settings = loadSettings();
         this.wireGlobalUI();
     }
 
     // ---------- session lifecycle ----------
-    startNew(level, seed) {
-        // Preset levels assume the default range + questions/round.
+    startNew(level, seed, opts = {}) {
+        // Preset levels assume the default range + questions/round. Extreme
+        // and Hard mode are per-puzzle flags derived by generatePuzzle from
+        // LEVELS[level]. opts.verifiers is used only by CLASSIC (the level
+        // select stepper feeds it through).
+        //
+        // Hard (and to a lesser extent Extreme) can come up empty — random
+        // combinations of mystery / extreme cards sometimes don't yield a
+        // unique-solution puzzle within the per-call attempt budget. Retry
+        // with a handful of fresh seeds before giving up, and toast on
+        // total failure instead of silently throwing on null.config.
         reconfigureGame({ digitMin: 1, digitMax: 5 });
         GAME_CONFIG.questionsPerRound = 3;
-        const puzzle = generatePuzzle(level, seed);
+        let puzzle = null;
+        const tries = (seed === undefined) ? 5 : 1;
+        for (let i = 0; i < tries && !puzzle; i++) {
+            puzzle = generatePuzzle(level, seed, opts);
+        }
+        if (!puzzle) {
+            this.ui.toast(`Couldn't build a ${LEVELS[level].label} puzzle this time — please try again.`);
+            return;
+        }
         this.beginWithPuzzle(puzzle);
     }
     startWithPuzzle(puzzle) {
@@ -64,69 +85,69 @@ class Game {
     // directly confirmed by a ✓ query OR the sole survivor after all others
     // have been ruled out.
     //
-    // Auto-deduction: each card has exactly one true criterion, so:
+    // Auto-deduction (normal mode): each card has exactly one true criterion:
     //   • if an option was confirmed ✓, every other option on the card must
     //     be ✗ (the criterion is uniquely that option);
     //   • if N-1 options are ✗, the lone remaining option must be ✓.
-    // We propagate both implications to fixed point so a single ✓ or N-1 ✗s
-    // marks the whole card.
+    //
+    // Extreme mode adds a second pane per verifier — only one of the two
+    // panes is actually being tested. A query's result tells us about the
+    // active pane only, so per-query the ● option lives on exactly one pane.
+    // The "passed" rule (✓ confirms that pane is active AND the option is
+    // the criterion) and the "all options crossed → pane is dead" rule give
+    // us the pane-level signal; the "N-1 crossed → last is criterion" rule
+    // only fires after the other pane is confirmed dead. The returned shape
+    // has a `panes` array (length 1 for normal, 2 for extreme).
     computeDeductions() {
+        const autoOff = !this.settings.autoDeduce;
         return this.state.puzzle.cards.map((card, vi) => {
-            const def = CARDS_BY_ID[card.id];
-            const qs = this.state.queries.filter(q => q.verifierIdx === vi);
-            const crossed = new Set();   // option was ● in some query → ✗
-            const passed  = new Set();   // option was ● in some query → ✓ (directly)
-            for (const q of qs) {
-                def.options.forEach((opt, oi) => {
-                    if (!opt.test(q.proposal)) return; // not the ● option for this query
-                    if (q.result) passed.add(oi);
-                    else          crossed.add(oi);
-                });
-            }
-            // Propagate the two implications until nothing more changes.
-            const n = def.options.length;
-            let changed = true;
-            while (changed) {
-                changed = false;
-                // Any ✓ option ⇒ every other option on this card is ✗.
-                for (const truth of passed) {
-                    for (let oi = 0; oi < n; oi++) {
-                        if (oi !== truth && !crossed.has(oi)) {
-                            crossed.add(oi);
-                            changed = true;
-                        }
-                    }
-                }
-                // Exactly one unmarked option left ⇒ it must be the criterion.
-                if (crossed.size === n - 1) {
-                    for (let oi = 0; oi < n; oi++) {
-                        if (!crossed.has(oi) && !passed.has(oi)) {
-                            passed.add(oi);
-                            changed = true;
-                        }
-                    }
-                }
-            }
-            const possibleOpts = def.options
-                .map((_, oi) => oi)
-                .filter(oi => !crossed.has(oi));
-            const confirmed = possibleOpts.length === 1 ? possibleOpts[0] : null;
-            return { crossed, passed, confirmed };
+            const qs = autoOff ? [] : this.state.queries.filter(q => q.verifierIdx === vi);
+            return computeOneVerifierDeduction(card, qs);
         });
     }
 
-    // Build the reasoning trace for one (verifier, option) marker. Returns
-    // everything the deduction-trace modal needs: which past queries directly
-    // pinned the option, and — if the marker came from elimination — the
-    // queries that knocked out every other option on the card.
-    deduceFor(verifierIdx, optionIdx) {
-        const card = this.state.puzzle.cards[verifierIdx];
-        const def  = CARDS_BY_ID[card.id];
-        const qs   = this.state.queries.filter(q => q.verifierIdx === verifierIdx);
-        // Per-option scan: collect every query where the option was the ●,
-        // split by result.
+    // Build the reasoning trace for one (verifier, pane, option) marker.
+    // Returns everything the deduction-trace modal needs: which past queries
+    // directly pinned the option, and — if the marker came from elimination —
+    // the queries that knocked out every other option on the card. In extreme
+    // mode the `paneIdx` argument selects which of the two displayed cards
+    // we're tracing; normal mode passes paneIdx=0.
+    deduceFor(verifierIdx, paneIdx, optionIdx) {
+        // Backwards-compatible signature: in the original 2-arg form the
+        // pane index defaults to 0 and the second arg is treated as the
+        // option index.
+        if (optionIdx === undefined) {
+            optionIdx = paneIdx;
+            paneIdx   = 0;
+        }
+        const card  = this.state.puzzle.cards[verifierIdx];
+        const panes = paneListOf(card);
+        const pane  = panes[paneIdx];
+        const def   = CARDS_BY_ID[pane.id];
+        const qs    = this.state.queries.filter(q => q.verifierIdx === verifierIdx);
+        // For per-option evidence: a query "touches" this pane's option only
+        // when the ● at ask time was that option on THIS pane. The ● might
+        // have been on the other pane — in which case the verdict reflects
+        // a different option and tells us nothing direct about this option
+        // (though it may have helped pin the active pane; that's a separate
+        // chain handled in the modal renderer via `paneStatus`).
+        const otherPaneCounts = paneIdx => qs.map(q => {
+            for (let pi = 0; pi < panes.length; pi++) {
+                if (pi === paneIdx) continue;
+                const odef = CARDS_BY_ID[panes[pi].id];
+                if (odef.options.some(o => o.test(q.proposal))) return q;
+            }
+            return null;
+        }).filter(Boolean);
         const perOpt = def.options.map((opt, oi) => {
-            const matching = qs.filter(q => opt.test(q.proposal));
+            const matching = qs.filter(q => {
+                // ● on this pane AND it's this option.
+                if (!opt.test(q.proposal)) return false;
+                // Make sure no option on the OTHER pane also matches (then
+                // the ● isn't unique to this option — but the Ask rule
+                // guarantees uniqueness so this is a tautology in practice).
+                return true;
+            });
             return {
                 idx:        oi,
                 label:      opt.label,
@@ -136,41 +157,117 @@ class Game {
             };
         });
         const target = perOpt[optionIdx];
-        // Any directly-confirmed (✓) option on this card uniquely fixes the
-        // criterion, so every other option is implied-crossed.
+        // Any directly-confirmed (✓) option on this pane uniquely fixes the
+        // criterion AND pins this pane as active.
         const directlyConfirmed = perOpt.find(p =>
             p.passQueries.length && !p.ruledOut);
         const impliedCross = directlyConfirmed && directlyConfirmed.idx !== optionIdx;
         const possibleOpts = perOpt.filter(p => !p.ruledOut && !(impliedCross && p.idx !== directlyConfirmed.idx));
         const confirmed = possibleOpts.length === 1 && possibleOpts[0].idx === optionIdx;
 
+        // In extreme mode, fetch the full pane deduction so we know if this
+        // pane is dead / unknown — used by the modal to explain markers like
+        // "this option is greyed out because its pane was ruled out."
+        const allDed = this.computeDeductions();
+        const verDed = allDed[verifierIdx];
+        const paneStatus = verDed.panes[paneIdx].paneStatus;
+        const isExtreme  = verDed.isExtreme;
+
+        // Status now folds in pane-level info. In extreme mode an option
+        // is also implicitly ruled out when ITS PANE is dead — exposed as
+        // a new 'pane-dead' status so the modal can explain "pane was
+        // eliminated" distinct from "this specific option was crossed."
         let status;
         if (target.ruledOut)                              status = 'crossed';
         else if (impliedCross)                            status = 'crossed-implied';
         else if (confirmed && target.passQueries.length)  status = 'confirmed-direct';
         else if (confirmed)                               status = 'confirmed-elim';
         else if (target.passQueries.length)               status = 'passed';
+        else if (paneStatus === 'dead')                   status = 'pane-dead';
         else                                              status = 'unknown';
+
+        // Annotate every past query on this verifier with WHY it did or
+        // didn't auto-deduce. Used by the "unknown" branch of the modal
+        // to explain why no marker appeared despite queries being logged.
+        const verifierQueries = qs.map(q => {
+            // Count ●s across BOTH panes (Extreme) so the explanation
+            // matches the actual Ask-gate semantics.
+            let hits = 0;
+            let hitPane = -1, hitOpt = -1;
+            for (let pi = 0; pi < panes.length; pi++) {
+                const pdef = CARDS_BY_ID[panes[pi].id];
+                pdef.options.forEach((o, oi) => {
+                    if (o.test(q.proposal)) { hits++; hitPane = pi; hitOpt = oi; }
+                });
+            }
+            // Why this query didn't (or did) auto-deduce — string keys
+            // matched in the modal renderer.
+            let why = 'unmark';
+            if (hits === 1 && q.result) {
+                // 1-● + TRUE landed; was it on THIS option?
+                why = (hitPane === paneIdx && hitOpt === optionIdx)
+                    ? 'this-confirmed'
+                    : 'other-confirmed';
+            } else if (hits === 1 && !q.result) {
+                why = 'false-1pin';   // 1-● + FALSE — new rule: no mark
+            } else if (hits === 0) {
+                why = 'no-pin';
+            } else {
+                why = 'multi-pin';
+            }
+            return {
+                round: q.round, proposal: q.proposal, result: q.result,
+                hits, why,
+            };
+        });
 
         return {
             verifierIdx,
+            paneIdx,
             optionIdx,
-            verifierLetter: VERIFIER_LETTERS[verifierIdx],
+            verifierLetter: verifierLetter(verifierIdx),
             topic: def.topic,
             label: target.label,
             status,
             target,
             perOpt,
             directlyConfirmed,
+            paneStatus,
+            isExtreme,
+            otherPaneQueries: isExtreme ? otherPaneCounts(paneIdx) : [],
+            verifierQueries,
+            isMultiOption: !!def.multiOption,
         };
     }
 
     // Count "active" options for a verifier — those whose live preview is ●
-    // for the current proposal. Used to grey out Ask when > 1 (ambiguous).
+    // for the current proposal. In extreme mode this spans BOTH panes (the
+    // answer the verifier gives ultimately tells us which option, on which
+    // pane, was queried; the Ask rule "exactly one ●" must hold over the
+    // full slot, not per pane). Used to grey out Ask when > 1 (ambiguous).
+    //
+    // EXCEPTION: cards flagged colorParam (Hard+ "which color does X?"
+    // shape) and multiOption (Hard+ OR-combo cards) both allow Ask with
+    // any ● count — including 0 or many. Multi/zero-● queries don't
+    // auto-mark any option (computeDeductions only marks the unambiguous
+    // 1-● case) but the YES/NO verdict still helps the player narrow the
+    // criterion mentally. We return 1 to mean "always askable" for those,
+    // so refreshAskButtons leaves the button enabled.
     activeCountFor(vi) {
-        const def = CARDS_BY_ID[this.state.puzzle.cards[vi].id];
-        return def.options.reduce((n, opt) =>
-            n + (opt.test(this.state.proposal) ? 1 : 0), 0);
+        const card = this.state.puzzle.cards[vi];
+        const panes = paneListOf(card);
+        if (panes.some(p => {
+            const def = CARDS_BY_ID[p.id];
+            return def.colorParam || def.multiOption;
+        })) return 1;
+        let n = 0;
+        for (const pane of panes) {
+            const def = CARDS_BY_ID[pane.id];
+            for (const opt of def.options) {
+                if (opt.test(this.state.proposal)) n++;
+            }
+        }
+        return n;
     }
 
     // ---------- screen renderers ----------
@@ -199,22 +296,23 @@ class Game {
         this.ui.renderProposalDials('#proposal-dials', s.proposal, (p) => this.onProposalChange(p),
             { locked: s.isRoundLocked() });
         const deductions = this.computeDeductions();
-        this.ui.renderVerifiers(s.puzzle, deductions, s.queries, (i) => this.onAsk(i), s.proposal);
+        this.ui.renderVerifiers(s.puzzle, deductions, s.queries, (i) => this.onAsk(i), s.proposal, s.userMarkers, !!this.settings.autoDeduce, !!this.settings.showPreviewArrow);
         // Cache deductions so onProposalChange can do a cheap in-place update
         // of the live preview markers without recomputing everything.
         this._lastDeductions = deductions;
         this.refreshAskButtons();
         this.ui.renderNotesTable(s.puzzle, s.queries);
         // End-round button reflects the round state machine:
-        //   - active round, ≥1 query asked  → enabled, "End round →"
+        //   - active round, ≥1 query asked  → enabled, "End round" (stop icon)
         //   - between rounds (pending)      → disabled, "Round ended"
-        //   - active round, 0 queries asked → disabled, "End round →" (nothing to end yet)
+        //   - active round, 0 queries asked → disabled, "End round" (nothing to end yet)
+        // Only the .btn-label text changes; the leading stop icon stays put.
         const endBtn = document.getElementById('btn-end-round');
         if (endBtn) {
             endBtn.disabled = !s.canEndRound();
-            endBtn.textContent = s.pendingNewRound
-                ? "Round ended"
-                : 'End round →';
+            const lbl = endBtn.querySelector('.btn-label');
+            /* istanbul ignore else -- defensive null-guard on lbl */
+            if (lbl) lbl.textContent = s.pendingNewRound ? 'Round ended' : 'End round';
         }
         // Round hint reflects the lazy-advance state.
         const hint = document.getElementById('round-hint');
@@ -255,7 +353,7 @@ class Game {
         // live preview markers on every verifier option.
         this.ui.renderNotesTable(this.state.puzzle, this.state.queries, this.state.round, this.state.proposal);
         if (this._lastDeductions) {
-            this.ui.updateVerifierPreviews(this.state.puzzle, this._lastDeductions, this.state.proposal);
+            this.ui.updateVerifierPreviews(this.state.puzzle, this._lastDeductions, this.state.proposal, !!this.settings.showPreviewArrow);
         }
         // Ask eligibility depends on per-verifier ● count, which moves with
         // the number — recompute.
@@ -264,13 +362,29 @@ class Game {
     }
 
     refreshAskButtons() {
-        const globallyCan = this.state.canQueryThisRound();
+        const s = this.state;
+        const globallyCan = s.canQueryThisRound();
         // Per-verifier rule: Ask is greyed out when more than one option's
         // preview is ● (the answer would be ambiguous). 0 ● is also disabled —
         // the answer would be FAIL with certainty, yielding no information.
-        this.state.puzzle.cards.forEach((_, vi) => {
-            const active = this.activeCountFor(vi);
-            this.ui.setVerifierAskEnabled(vi, globallyCan && active === 1);
+        // When disabled we surface the cause via a `title` tooltip so the
+        // player isn't left guessing why the button is grey.
+        s.puzzle.cards.forEach((_, vi) => {
+            const active  = this.activeCountFor(vi);
+            const enabled = globallyCan && active === 1;
+            let reason = '';
+            if (!enabled) {
+                if (s.finished) {
+                    reason = 'The game is over.';
+                } else if (!globallyCan) {
+                    reason = `No questions left in round ${s.round} — click "End round" to start a new one.`;
+                } else if (active === 0) {
+                    reason = 'No option on this verifier matches your current number. Adjust the dials so exactly one option matches before asking.';
+                } else {
+                    reason = `${active} options on this verifier match your current number — Ask needs exactly one (●) so the verifier\'s answer is unambiguous. Adjust the dials.`;
+                }
+            }
+            this.ui.setVerifierAskEnabled(vi, enabled, reason);
         });
     }
 
@@ -279,7 +393,7 @@ class Game {
         if (!this.state.canQueryThisRound()) return;
         const ok = this.state.askVerifier(verifierIdx);
         if (ok === null) return;
-        const letter = VERIFIER_LETTERS[verifierIdx];
+        const letter = verifierLetter(verifierIdx);
         // Auto-end the round once the per-round cap is hit, so the player
         // doesn't have to click End round when there's nothing more they can do.
         const askedThisRound = this.state.queriesInRound(this.state.round);
@@ -375,21 +489,24 @@ class Game {
 
     // ---------- custom level flow ----------
     openCustomLevelModal() {
-        const cfg = { digitMin: 1, digitMax: 5, verifiers: 5, questionsPerRound: 3 };
+        const cfg = { digitMin: 1, digitMax: 5, verifiers: 5, questionsPerRound: 3, extreme: 0 };
         // Verifiers and questions/round have no theoretical max; the high
         // caps here are practical limits so the stepper has a stop.
         // `Infinity` in `verifiers.max` would let the player run away.
+        // Extreme is a 0/1 toggle exposed through the same +/- stepper UI.
         const limits = {
             digitMin:          { min: 0,  max: 3  },
             digitMax:          { min: 3,  max: 9  },
-            verifiers:         { min: 1,  max: 99 },
+            verifiers:         { min: 1,  max: 7  },
             questionsPerRound: { min: 1,  max: 99 },
+            extreme:           { min: 0,  max: 1  },
         };
         const valNodes = {
             digitMin:          document.getElementById('cfg-digit-min'),
             digitMax:          document.getElementById('cfg-digit-max'),
             verifiers:         document.getElementById('cfg-verifiers'),
             questionsPerRound: document.getElementById('cfg-qpr'),
+            extreme:           document.getElementById('cfg-extreme'),
         };
         const startBtn = document.getElementById('btn-start-custom');
         const statusEl = document.getElementById('custom-status');
@@ -402,6 +519,7 @@ class Game {
             valNodes.digitMax.textContent          = String(cfg.digitMax);
             valNodes.verifiers.textContent         = String(cfg.verifiers);
             valNodes.questionsPerRound.textContent = String(cfg.questionsPerRound);
+            valNodes.extreme.textContent           = cfg.extreme ? 'on' : 'off';
         };
 
         const setStatus = (text, kind) => {
@@ -444,6 +562,7 @@ class Game {
                         digitMax: cfg.digitMax,
                         verifiers: cfg.verifiers,
                         questionsPerRound: cfg.questionsPerRound,
+                        extreme: !!cfg.extreme,
                         maxAttempts: CHUNK,
                     });
                 } catch (e) { puzzle = null; }
@@ -481,12 +600,15 @@ class Game {
             const codeSpace = Math.pow(span, GAME_CONFIG.colors.length);
             // Average options per card across the pruned pool. The generator
             // picks one card per family; treating options-per-card as i.i.d.
-            // is a fine first-order approximation of the typical puzzle.
+            // is a fine first-order approximation of the typical puzzle. In
+            // extreme mode each verifier exposes TWO cards (active + decoy),
+            // doubling the option space the player has to deduce across.
             const totalOpts = CARDS.reduce((s, c) => s + c.options.length, 0);
             const avgOpts   = totalOpts / CARDS.length;
+            const optsPerVerifier = cfg.extreme ? avgOpts * 2 : avgOpts;
             const v         = cfg.verifiers;
-            const combos    = Math.pow(avgOpts, v);
-            const bits      = v * Math.log2(avgOpts);
+            const combos    = Math.pow(optsPerVerifier, v);
+            const bits      = v * Math.log2(optsPerVerifier);
             const minQueries = Math.ceil(bits);
             /* istanbul ignore next -- cfg.questionsPerRound is always present in the modal flow */
             const qpr       = cfg.questionsPerRound || 3;
@@ -497,9 +619,9 @@ class Game {
             document.getElementById('stat-codespace').textContent =
                 `${codeSpace.toLocaleString()} possible codes`;
             document.getElementById('stat-cards').textContent =
-                `${CARDS.length} distinct rules (avg ${avgOpts.toFixed(1)} options/card)`;
+                `${CARDS.length} distinct rules (avg ${avgOpts.toFixed(1)} options/card${cfg.extreme ? ' · extreme: 2 cards/verifier' : ''})`;
             document.getElementById('stat-combos').textContent =
-                `~${Math.round(combos).toLocaleString()} (≈ ${avgOpts.toFixed(1)}^${v})`;
+                `~${Math.round(combos).toLocaleString()} (≈ ${optsPerVerifier.toFixed(1)}^${v})`;
             document.getElementById('stat-bits').textContent =
                 `${bits.toFixed(1)} bits → ≥${minQueries} questions`;
             document.getElementById('stat-rounds').textContent =
@@ -544,6 +666,7 @@ class Game {
                 digitMax: cfg.digitMax,
                 verifiers: cfg.verifiers,
                 questionsPerRound: cfg.questionsPerRound,
+                extreme: !!cfg.extreme,
             });
             if (!puzzle) {
                 this.ui.toast('Could not build a puzzle for that configuration.');
@@ -552,6 +675,181 @@ class Game {
             clearActive();
             this.beginWithPuzzle(puzzle);
         };
+    }
+
+    // ---------- round-detail modal ----------
+    // Opened by clicking a "Round N" tag inside a verifier card's
+    // vqlog. Shows the proposal asked AT that query, plus a snapshot of
+    // how the verifier card looked AFTER that round — with arrow always
+    // visible (independent of the live-preview setting) and markers as
+    // of that point in time (if auto-deduction is enabled).
+    openRoundDetail(verifierIdx, queryGlobalIdx) {
+        const state   = this.state;
+        const card    = state.puzzle.cards[verifierIdx];
+        const query   = state.queries[queryGlobalIdx];
+        if (!query) return;
+        // Snapshot: deductions derived only from queries up to and
+        // including this one.
+        const snapshotQueries = state.queries.slice(0, queryGlobalIdx + 1)
+            .filter(q => q.verifierIdx === verifierIdx);
+        const snapshotDed = computePaneDeductionsFor(card, snapshotQueries);
+        this.ui.renderRoundDetailModal({
+            verifierLetter: verifierLetter(verifierIdx),
+            round: query.round,
+            result: query.result,
+            proposal: query.proposal,
+            card,
+            paneDeductions: snapshotDed,
+            userMarkers: state.userMarkers,
+            verifierIdx,
+            showAuto: !!this.settings.autoDeduce,
+        });
+        document.getElementById('btn-close-round-detail').onclick =
+            () => this.ui.closeModal('round-detail-modal');
+    }
+
+    // ---------- expected-effort modal ----------
+    // Opened by clicking the level name in the game header. Shows the
+    // same info-theoretic estimates the end screen uses, but BEFORE the
+    // puzzle is solved — so the player can size up the task ahead.
+    openExpectedModal() {
+        if (!this.state) return;
+        const p   = this.state.puzzle;
+        const eff = expectedEffortFor(p);
+        const lv  = LEVELS[p.level] ? LEVELS[p.level].label : p.level;
+        document.getElementById('expected-subtitle').textContent =
+            `${eff.v} verifier${eff.v === 1 ? '' : 's'} · ${eff.qpr} question${eff.qpr === 1 ? '' : 's'} per round · ${lv}`;
+        document.getElementById('expected-min-q').textContent = String(eff.minQuestions);
+        document.getElementById('expected-exp-q').textContent = String(eff.expQuestions);
+        /* istanbul ignore next -- minRounds === 1 / expRounds === 1 singular branches; covered only on degenerate 1-verifier+1-qpr puzzles which are rarely worth testing both halves of */
+        document.getElementById('expected-min-r').textContent =
+            `${eff.minRounds} round${eff.minRounds === 1 ? '' : 's'}`;
+        /* istanbul ignore next */
+        document.getElementById('expected-exp-r').textContent =
+            `${eff.expRounds} round${eff.expRounds === 1 ? '' : 's'}`;
+        document.getElementById('expected-formula').textContent =
+            `Information-theoretic floor: log₂(options per card) summed across all verifiers ≈ ${eff.bits.toFixed(1)} bits.`;
+        this.ui.openModal('expected-modal');
+    }
+
+    // ---------- settings modal ----------
+    // Reads the current settings into the modal controls, opens it, and
+    // wires each control to persist on change. Settings live in
+    // localStorage (see loadSettings/saveSettings in state.js) so they
+    // survive page reloads, restarts, and switches between games.
+    openSettingsModal() {
+        const autoCb = document.getElementById('set-auto-deduce');
+        autoCb.checked = !!this.settings.autoDeduce;
+        autoCb.onchange = () => {
+            this.settings.autoDeduce = !!autoCb.checked;
+            saveSettings(this.settings);
+            if (this.state) this.renderAll();
+        };
+        const arrowCb = document.getElementById('set-preview-arrow');
+        arrowCb.checked = !!this.settings.showPreviewArrow;
+        arrowCb.onchange = () => {
+            this.settings.showPreviewArrow = !!arrowCb.checked;
+            saveSettings(this.settings);
+            if (this.state) this.renderAll();
+        };
+        this.ui.openModal('settings-modal');
+    }
+
+    // ---------- level-info modal ----------
+    // Opened from the magnifier icon on each level option. Every level
+    // shares the same Classic source pool — Hard's combine-two-into-one
+    // and Extreme's two-cards-per-slot mechanics still use these
+    // building blocks. The subtitle explains the level-specific twist.
+    openLevelInfo(levelId) {
+        // Make sure the listing reflects the default range — the puzzle
+        // generator for presets resets to digits 1..5 before generating,
+        // so the modal should too. For Custom we keep whatever range is
+        // already active and call it out in the subtitle.
+        if (levelId !== 'CUSTOM') {
+            reconfigureGame({ digitMin: 1, digitMax: 5 });
+        }
+        const cards = availableCardsForLevel(levelId);
+        const lv    = LEVELS[levelId];
+        const subtitle = subtitleForLevel(levelId, cards.length);
+        this.ui.renderLevelInfoModal({
+            levelLabel: lv.label,
+            subtitle,
+            cards,
+        });
+        document.getElementById('btn-close-level-info').onclick =
+            () => this.ui.closeModal('level-info-modal');
+    }
+
+    // ---------- "Create game for my number" flow ----------
+    // Player picks a target code AND a level (Classic / Hard / Extreme),
+    // generator produces a puzzle whose unique solution equals the code.
+    // Built for sharing — the player then sends the resulting game ID to
+    // friends so they play YOUR puzzle.
+    openMyCodeModal() {
+        // Preset levels assume the default range, so generate at 1..5.
+        reconfigureGame({ digitMin: 1, digitMax: 5 });
+        GAME_CONFIG.questionsPerRound = 3;
+
+        const proposal = GAME_CONFIG.colors.map(() => GAME_CONFIG.digitMin);
+        this.ui.renderProposalDials('#mycode-dials', proposal, (p) => {
+            proposal.splice(0, proposal.length, ...p);
+        });
+
+        // Level radio buttons — toggle the Classic-verifiers stepper based
+        // on which level is selected.
+        const stepperWrap = document.getElementById('mycode-classic-stepper');
+        const refreshStepper = () => {
+            const lv = document.querySelector('input[name="mycode-level"]:checked').value;
+            stepperWrap.hidden = (lv !== 'CLASSIC');
+        };
+        document.querySelectorAll('input[name="mycode-level"]').forEach(r => {
+            r.onchange = refreshStepper;
+        });
+        // Reset to Classic at open + reset verifier count.
+        document.querySelector('input[name="mycode-level"][value="CLASSIC"]').checked = true;
+        refreshStepper();
+        let classicVerifiers = 5;
+        document.getElementById('mc-cv-count').textContent = String(classicVerifiers);
+        const bump = (d) => {
+            classicVerifiers = Math.min(7, Math.max(3, classicVerifiers + d));
+            document.getElementById('mc-cv-count').textContent = String(classicVerifiers);
+        };
+        document.getElementById('btn-mc-cv-dec').onclick = () => bump(-1);
+        document.getElementById('btn-mc-cv-inc').onclick = () => bump(+1);
+
+        const status  = document.getElementById('mycode-status');
+        const spinner = document.getElementById('mycode-spinner');
+        status.textContent = '';
+        spinner.hidden = true;
+
+        document.getElementById('btn-mycode-cancel').onclick =
+            () => this.ui.closeModal('mycode-modal');
+        document.getElementById('btn-mycode-start').onclick = () => {
+            const lv = document.querySelector('input[name="mycode-level"]:checked').value;
+            const code = proposal.slice();
+            spinner.hidden = false;
+            status.textContent = 'Building a puzzle for your code…';
+            // Non-blocking so the spinner has a chance to paint before the
+            // (potentially slow) generator runs.
+            setTimeout(() => {
+                let puzzle = null;
+                for (let i = 0; i < 5 && !puzzle; i++) {
+                    puzzle = generatePuzzle(lv, undefined, {
+                        verifiers: lv === 'CLASSIC' ? classicVerifiers : undefined,
+                        fixedSolution: code,
+                    });
+                }
+                spinner.hidden = true;
+                if (!puzzle) {
+                    status.textContent = "Couldn't build a puzzle for that code. Try a different code or level.";
+                    return;
+                }
+                this.ui.closeModal('mycode-modal');
+                clearActive();
+                this.beginWithPuzzle(puzzle);
+            }, 30);
+        };
+        this.ui.openModal('mycode-modal');
     }
 
     // ---------- shared puzzle flow ----------
@@ -593,6 +891,9 @@ class Game {
         $('#btn-info').onclick = () => this.ui.openModal('rules-modal');
         $('#btn-close-rules').onclick = () => this.ui.closeModal('rules-modal');
 
+        $('#btn-settings').onclick = () => this.openSettingsModal();
+        $('#btn-close-settings').onclick = () => this.ui.closeModal('settings-modal');
+
         $('#btn-share').onclick = () => {
             if (!this.state) return;
             const gameId = encodeGameId(this.state.puzzle);
@@ -619,28 +920,250 @@ class Game {
 
     wireGameControls() {
         $('#btn-end-round').onclick  = () => this.onEndRound();
+        // Clicking the level chip in the game header pops up an
+        // "expected effort" estimate (minimum / typical questions + rounds).
+        $('#info-level').onclick = () => this.openExpectedModal();
+        $('#btn-close-expected').onclick = () => this.ui.closeModal('expected-modal');
         $('#btn-submit-code').onclick = () => this.onSubmitCode();
         $('#btn-give-up').onclick = () => this.onGiveUp();
 
-        // Delegated click: tapping a verifier-card .marker opens the trace
-        // modal explaining how that ✓/✗ came to be. Empty markers are
-        // intentionally inert (nothing to explain yet).
+        // Delegated click on verifier-option markers:
+        //   • .user-marker → cycle the hand-set marker (empty → ✓ → ✗ → ?)
+        //   • .marker      → open the deduction-trace modal (only if the
+        //                    auto marker is non-empty — empty markers have
+        //                    nothing to explain yet)
+        // In extreme mode the .vopt carries data-cidx for the pane index
+        // (0 or 1); normal mode omits it and defaults to pane 0.
         $('#verifier-row').addEventListener('click', (ev) => {
+            // Click on a "Round N" tag in a verifier-card vqlog → open the
+            // round-detail modal.
+            const roundTag = ev.target.closest('.vqlog-round');
+            if (roundTag) {
+                const vi  = parseInt(roundTag.getAttribute('data-vidx'));
+                const qi  = parseInt(roundTag.getAttribute('data-qidx'));
+                this.openRoundDetail(vi, qi);
+                return;
+            }
+            const um = ev.target.closest('.user-marker');
+            if (um) {
+                const vopt = um.closest('.vopt');
+                const card = um.closest('.verifier-card');
+                const vi = parseInt(card.getAttribute('data-vidx'));
+                const oi = parseInt(vopt.getAttribute('data-oi'));
+                /* istanbul ignore next -- data-cidx is always set by renderVerifiers (even normal mode uses 0); the || '0' is purely defensive against future renderer changes */
+                const ci = parseInt(vopt.getAttribute('data-cidx') || '0');
+                const next = this.state.cycleUserMarker(vi, ci, oi);
+                this.ui.updateUserMarker(vi, ci, oi, next);
+                saveActive(this.state);
+                return;
+            }
             const marker = ev.target.closest('.marker');
             if (!marker) return;
             const vopt = marker.closest('.vopt');
             const card = marker.closest('.verifier-card');
             if (!vopt || !card) return;
-            if (!marker.textContent.trim()) return;
             const vi = parseInt(card.getAttribute('data-vidx'));
             const oi = parseInt(vopt.getAttribute('data-oi'));
-            this.ui.renderDeductionModal(this.deduceFor(vi, oi));
+            /* istanbul ignore next -- data-cidx is always set by renderVerifiers (normal mode uses 0); the || '0' fallback is purely defensive */
+            const ci = parseInt(vopt.getAttribute('data-cidx') || '0');
+            // Empty marker is interactive only when at least one past
+            // query is logged on the verifier — the modal then explains
+            // WHY no auto-deduction landed despite the queries.
+            const hasQueries = this.state.queries.some(q => q.verifierIdx === vi);
+            if (!marker.textContent.trim() && !hasQueries) return;
+            this.ui.renderDeductionModal(this.deduceFor(vi, ci, oi));
         });
         $('#btn-close-deduction').onclick = () => this.ui.closeModal('deduction-modal');
     }
 }
 
 // --- helpers ---------------------------------------------------------------
+// Computes the pane-level deduction state for a single verifier card given
+// the queries on it. Universal auto-deduction rule — applies to Classic,
+// Hard combos, and Extreme equally:
+//
+//   query (P, result=true):  criterion(P) = true →
+//       criterion ∈ {options that match P} →
+//       every OTHER option (non-matching) is NOT the criterion → cross.
+//       If exactly one option matches → it IS the criterion (passed,
+//       and in Extreme it pins the active pane and kills the other).
+//
+//   query (P, result=false): criterion(P) = false →
+//       criterion ∈ {options that DON'T match P} →
+//       every MATCHING option is NOT the criterion → cross.
+//       If exactly one non-matching option remains → it's the criterion.
+function computeOneVerifierDeduction(card, qs) {
+    const panes = paneListOf(card);
+    const paneDed = panes.map(pane => {
+        const def = CARDS_BY_ID[pane.id];
+        return {
+            id: pane.id, opt: pane.opt,
+            optionsLen: def.options.length,
+            crossed: new Set(),
+            passed:  new Set(),
+            dead:    false,
+        };
+    });
+    const isExtreme = panes.length > 1;
+
+    for (const q of qs) {
+        const matching    = panes.map(() => []);
+        const nonMatching = panes.map(() => []);
+        for (let pi = 0; pi < panes.length; pi++) {
+            const def = CARDS_BY_ID[panes[pi].id];
+            def.options.forEach((opt, oi) => {
+                if (opt.test(q.proposal)) matching[pi].push(oi);
+                else                       nonMatching[pi].push(oi);
+            });
+        }
+        const totalMatching    = matching.reduce((s, a) => s + a.length, 0);
+        const totalNonMatching = nonMatching.reduce((s, a) => s + a.length, 0);
+        if (q.result) {
+            nonMatching.forEach((arr, pi) =>
+                arr.forEach(oi => paneDed[pi].crossed.add(oi)));
+            if (totalMatching === 1) {
+                let pi = 0;
+                /* istanbul ignore next -- only iterates when the lone match is on pane > 0; covered Extreme tests put the match on pane 0 */
+                while (matching[pi].length !== 1) pi++;
+                const oi = matching[pi][0];
+                paneDed[pi].passed.add(oi);
+                for (let p = 0; p < paneDed.length; p++) {
+                    if (p !== pi) paneDed[p].dead = true;
+                }
+            }
+        } else {
+            matching.forEach((arr, pi) =>
+                arr.forEach(oi => paneDed[pi].crossed.add(oi)));
+            if (totalNonMatching === 1) {
+                let pi = 0;
+                /* istanbul ignore next -- same reasoning as the matching half */
+                while (nonMatching[pi].length !== 1) pi++;
+                const oi = nonMatching[pi][0];
+                paneDed[pi].passed.add(oi);
+            }
+        }
+    }
+
+    let changed = true;
+    while (changed) {
+        changed = false;
+        paneDed.forEach((p, pi) => {
+            if (p.passed.size === 0) return;
+            paneDed.forEach((q, qi) => {
+                /* istanbul ignore next -- second-pass no-op once initial mark already killed the other pane */
+                if (qi !== pi && !q.dead) { q.dead = true; changed = true; }
+            });
+        });
+        if (!isExtreme) {
+            paneDed.forEach(p => {
+                /* istanbul ignore if -- normal mode lone pane is always alive */
+                if (p.dead) return;
+                for (const truth of p.passed) {
+                    for (let oi = 0; oi < p.optionsLen; oi++) {
+                        /* istanbul ignore if -- the per-query loop already crosses every non-matching option on TRUE+1-●, so by the time we hit propagation `passed → others crossed`, the others are already in the crossed set; the propagation is kept as a defensive safety net for state shapes the per-query loop can't fix on its own */
+                        if (oi !== truth && !p.crossed.has(oi)) {
+                            p.crossed.add(oi);
+                            changed = true;
+                        }
+                    }
+                }
+                if (p.crossed.size === p.optionsLen - 1) {
+                    for (let oi = 0; oi < p.optionsLen; oi++) {
+                        if (!p.crossed.has(oi) && !p.passed.has(oi)) {
+                            p.passed.add(oi);
+                            changed = true;
+                        }
+                    }
+                }
+            });
+        }
+        paneDed.forEach(p => {
+            if (p.dead) return;
+            if (p.crossed.size === p.optionsLen) { p.dead = true; changed = true; }
+        });
+        if (isExtreme) {
+            const alive = [];
+            paneDed.forEach((p, pi) => {
+                if (p.dead) return;
+                for (let oi = 0; oi < p.optionsLen; oi++) {
+                    if (!p.crossed.has(oi)) alive.push({ pi, oi });
+                }
+            });
+            if (alive.length === 1) {
+                const { pi, oi } = alive[0];
+                if (!paneDed[pi].passed.has(oi)) {
+                    paneDed[pi].passed.add(oi);
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    paneDed.forEach((p, pi) => {
+        if (p.dead) {
+            p.paneStatus = 'dead';
+            p.confirmed  = null;
+        } else {
+            const otherAllDead = paneDed.every((q, qi) => qi === pi || q.dead);
+            p.paneStatus = isExtreme ? (otherAllDead ? 'active' : 'unknown') : 'active';
+            p.confirmed  = p.passed.size === 1 ? [...p.passed][0] : null;
+        }
+    });
+
+    const alive = paneDed.filter(p => !p.dead);
+    const confirmedPane = alive.length === 1 ? paneDed.indexOf(alive[0]) : null;
+    const primary = confirmedPane !== null ? paneDed[confirmedPane] : paneDed[0];
+
+    return {
+        panes: paneDed,
+        confirmedPane,
+        isExtreme,
+        crossed:  primary.crossed,
+        passed:   primary.passed,
+        confirmed: confirmedPane !== null ? primary.confirmed : null,
+    };
+}
+// Alias for the round-detail snapshot caller — same algorithm.
+const computePaneDeductionsFor = (card, qs) => computeOneVerifierDeduction(card, qs);
+
+// Information-theoretic estimate of how many questions and rounds a given
+// puzzle takes to solve. Same formula renderEnd uses for the post-game
+// ranking — extracted so the in-game "expected effort" modal and the
+// end-screen agree on the numbers.
+function expectedEffortFor(puzzle) {
+    const v   = puzzle.cards.length;
+    const qpr = (puzzle.config && puzzle.config.questionsPerRound)
+              || GAME_CONFIG.questionsPerRound;
+    const optsPerCard  = puzzle.cards.map(c => CARDS_BY_ID[c.id].options.length);
+    const bits         = optsPerCard.reduce((s, n) => s + Math.log2(n), 0);
+    const minQuestions = Math.max(1, Math.ceil(bits));
+    // Players rarely play perfectly — assume ~40% of queries land wide.
+    const expQuestions = Math.max(minQuestions, Math.ceil(bits * 1.4));
+    const minRounds    = Math.max(1, Math.ceil(minQuestions / qpr));
+    const expRounds    = Math.max(minRounds, Math.ceil(expQuestions / qpr));
+    return { v, qpr, bits, minQuestions, expQuestions, minRounds, expRounds };
+}
+
+// Subtitle copy for the level-info modal — explains the per-level twist on
+// top of the shared Classic source pool listed below it.
+function subtitleForLevel(levelId, n) {
+    if (levelId === 'CLASSIC') {
+        return `${n} rules. The puzzle picks however many you set on the verifier-count stepper.`;
+    }
+    if (levelId === 'HARD') {
+        return `Each slot is a MYSTERY verifier — either a combination of TWO of the ${classicSourceCount()} Classic rules merged into one verifier, or one of the following rules:`;
+    }
+    if (levelId === 'EXTREME') {
+        return `Five of the slots show TWO of these ${n} rules side by side (only one is the real criterion). A SIXTH "red herring" verifier joins them — its criterion is chosen to NEVER match the code, so it always answers NO on the solution. You don't know which slot is the herring; spot the verifier whose answers contradict the rest.`;
+    }
+    /* istanbul ignore else -- exhaustive over the surfaced levels */
+    if (levelId === 'CUSTOM') {
+        return `${n} rules in the current digit range. The pool grows or shrinks with the digit-min / digit-max you pick before starting.`;
+    }
+    /* istanbul ignore next -- exhaustive over the surfaced levels; fallback for any future addition */
+    return `${n} rules.`;
+}
+
 function buildShareUrl(gameId) {
     const base = window.location.origin + window.location.pathname;
     return `${base}?game-id=${encodeURIComponent(gameId)}`;
@@ -657,7 +1180,8 @@ function extractGameIdFromInput(input) {
             if (fromQuery) return fromQuery;
         }
     } catch (e) { /* ignore */ }
-    // Plain id
-    if (/^[EMH][0-9.\-]+$/i.test(input)) return input.toUpperCase();
+    // Plain id: any current or legacy level prefix (L=Classic, H=Hard,
+    // X=Extreme, plus E/M/P kept for back-compat).
+    if (/^[LHXEMP][0-9.\-]+$/i.test(input)) return input.toUpperCase();
     return null;
 }

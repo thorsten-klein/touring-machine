@@ -147,18 +147,103 @@ class UI {
     }
 
     // ----- level select -----
-    renderLevelSelect(levels, onChoose, onBack) {
+    // Layout: a Classic-verifiers stepper on top (only relevant for the
+    // CLASSIC level — other levels use their own fixed counts), then the
+    // level option buttons. Each option has a magnifier icon on the right;
+    // clicking the icon stops the click before it reaches the outer button
+    // (so we don't accidentally start a game) and opens the level-info
+    // modal listing every verifier card the generator can pick from.
+    renderLevelSelect(items, onChoose, onInfo, onBack) {
         const container = $('#level-options');
         container.innerHTML = '';
-        for (const lv of levels) {
+        for (const item of items) {
+            // Separator entry: `{ separator: 'Others' }` renders a labelled
+            // divider between groups of level options.
+            if (item.separator) {
+                container.appendChild(el('div', { class: 'level-section-sep' },
+                    el('span', { class: 'sep-line' }),
+                    el('span', { class: 'sep-label' }, item.separator),
+                    el('span', { class: 'sep-line' })));
+                continue;
+            }
+            const lv = item;
+            const info = lv.noInfo ? null : el('span', {
+                class: 'level-info-icon',
+                title: `See verifiers available in ${lv.label}`,
+                onclick: (ev) => { ev.stopPropagation(); onInfo(lv.id); },
+                html: LEVEL_INFO_MAGNIFIER_SVG,
+            });
             const btn = el('button',
-                { class: 'level-option', onclick: () => onChoose(lv.id) },
+                { class: 'level-option', 'data-level': lv.id,
+                  onclick: () => onChoose(lv.id) },
                 el('strong', {}, lv.label),
-                el('span', {}, lv.description)
+                el('span', {}, lv.description),
+                info,
             );
             container.appendChild(btn);
         }
         $('#btn-back-to-main').onclick = onBack;
+    }
+
+    // Read / write the Classic-verifiers stepper. The stepper is part of
+    // the level select screen and only affects the CLASSIC level — other
+    // levels ignore it.
+    getClassicVerifiers() {
+        const n = parseInt($('#cv-count').textContent, 10);
+        /* istanbul ignore next -- the stepper always shows a finite integer; the `: 5` fallback is defensive against a malformed DOM */
+        return isFinite(n) ? n : 5;
+    }
+    setClassicVerifiers(n) {
+        $('#cv-count').textContent = String(n);
+    }
+    /* istanbul ignore next -- default-parameter values; main.js always passes an opts object with all three keys explicitly */
+    wireClassicStepper({ min = 3, max = 7, initial = 5 } = {}) {
+        this.setClassicVerifiers(initial);
+        const bump = (delta) => {
+            const next = Math.min(max, Math.max(min, this.getClassicVerifiers() + delta));
+            this.setClassicVerifiers(next);
+        };
+        $('#btn-cv-dec').onclick = () => bump(-1);
+        $('#btn-cv-inc').onclick = () => bump(+1);
+    }
+
+    // ----- level-info modal -----
+    // Lists every verifier card the generator may pick from for a given
+    // level. Custom is treated as "the full non-Hard+-only pool at the
+    // current digit range"; Hard+ also includes the hardplusOnly combo +
+    // pairwise cards.
+    renderLevelInfoModal({ levelLabel, subtitle, cards }) {
+        $('#level-info-title').textContent = `Verifiers available in ${levelLabel}`;
+        $('#level-info-subtitle').textContent = subtitle;
+        const body = $('#level-info-body');
+        body.innerHTML = '';
+        const list = el('ol', { class: 'level-info-list' });
+        cards.forEach((card, idx) => {
+            const tagSpans = [];
+            // (colorParam is signalled inline by emphasising the word
+            // "color" inside the topic — no separate chip.)
+            /* istanbul ignore if -- multiOption is set on combo cards which only live in Hard's pool, but Hard's level-info modal lists colorParam cards (not combos); so this chip is currently unreachable from the surfaced flow */
+            if (card.multiOption)  tagSpans.push(el('span', { class: 'lvtag lvtag-multi' }, 'multi-match'));
+            /* istanbul ignore if -- hardplusOnly cards only listed in Hard's modal */
+            if (card.hardplusOnly) tagSpans.push(el('span', { class: 'lvtag lvtag-hp' }, 'Hard only'));
+            const topicNodes = card.colorParam
+                ? highlightColorWord(card.topic)
+                : labelToColoredNodes(card.topic);
+            const head = el('div', { class: 'lvcard-head' },
+                el('span', { class: 'lvcard-topic' }, topicNodes),
+                ...tagSpans,
+            );
+            const opts = el('ul', { class: 'lvcard-opts' },
+                ...card.options.map(o =>
+                    el('li', {}, labelToColoredNodes(o.label))));
+            // Number sits to the LEFT of the card body, outside the head.
+            list.appendChild(el('li', { class: 'lvcard' },
+                el('span', { class: 'lvcard-num' }, `${idx + 1}.`),
+                el('div', { class: 'lvcard-body' }, head, opts),
+            ));
+        });
+        body.appendChild(list);
+        this.openModal('level-info-modal');
     }
 
     // ----- proposal dials -----
@@ -210,91 +295,153 @@ class UI {
     }
 
     // ----- verifier cards row -----
-    renderVerifiers(puzzle, deductions, queries, onAsk, proposal) {
+    renderVerifiers(puzzle, deductions, queries, onAsk, proposal, userMarkers, autoDeduce, showPreviewArrow) {
         const row = $('#verifier-row');
         row.innerHTML = '';
+        const um = userMarkers || {};
+        const showAuto  = autoDeduce !== false;
+        const showArrow = showPreviewArrow !== false;
         puzzle.cards.forEach((card, i) => {
-            const def = CARDS_BY_ID[card.id];
             const verifierQueries = queries.filter(q => q.verifierIdx === i);
-            const exhausted = !!deductions[i] && deductions[i].confirmed !== null;
+            const verDed = deductions[i] || { panes: [], isExtreme: false };
+            const panes  = paneListOf(card);
+            const isExtreme = panes.length > 1;
 
-            const optsList = el('ul', { class: 'voptions' });
-            def.options.forEach((opt, oi) => {
-                const ded = deductions[i] || { crossed: new Set(), passed: new Set(), confirmed: null };
-                const isCross = ded.crossed.has(oi);
-                const isPassed = ded.passed && ded.passed.has(oi);
-                const isConfirmed = ded.confirmed === oi;
-                const title = isConfirmed ? 'This must be the criterion'
-                            : isCross    ? 'Past query: FAIL on this rule'
-                            :               'Still possible';
-                // Right-side indicator: just the live ← arrow whenever the
-                // current number activates this option, regardless of any
-                // past verdict on the row. Past verdicts live on the LEFT
-                // marker (✓/✗).
-                const wouldPass = proposal && opt.test(proposal);
-                const preview = el('span', {
-                    class: 'preview' + (wouldPass ? ' pass' : ' hidden-preview'),
-                    title: wouldPass ? 'Current number would PASS this rule' : '',
-                    html: wouldPass ? PREVIEW_ARROW_SVG : '',
+            // Build one .vcard-pane per pane. In normal mode there's a single
+            // pane and the layout looks identical to the pre-extreme one
+            // (head includes the topic). In extreme mode, the topic moves
+            // INTO each pane so the player can read the two competing
+            // criteria side-by-side under one shared "Verifier A" header.
+            const buildPane = (paneIdx) => {
+                const pane = panes[paneIdx];
+                const def  = CARDS_BY_ID[pane.id];
+                const pded = (verDed.panes && verDed.panes[paneIdx]) || {
+                    crossed: new Set(), passed: new Set(), confirmed: null, paneStatus: 'active',
+                };
+                const paneDead = pded.paneStatus === 'dead';
+
+                const optsList = el('ul', { class: 'voptions' });
+                // Combo cards merge two source cards' options end-to-end —
+                // insert an OR divider so the player sees the boundary.
+                const splitAt = (def.comboSrcA !== undefined && CARDS_BY_ID[def.comboSrcA])
+                    ? CARDS_BY_ID[def.comboSrcA].options.length
+                    : -1;
+                def.options.forEach((opt, oi) => {
+                    if (oi === splitAt) {
+                        optsList.appendChild(el('li', { class: 'vopt-or-sep' },
+                            el('span', { class: 'or-sep-line' }),
+                            el('span', { class: 'or-sep-label' }, 'OR'),
+                            el('span', { class: 'or-sep-line' })));
+                    }
+                    const isCross    = pded.crossed.has(oi);
+                    const isPassed   = pded.passed && pded.passed.has(oi);
+                    const isConfirmed = pded.confirmed === oi;
+                    const title = paneDead
+                                ? 'This card was ruled out as the active criterion'
+                                : isConfirmed ? 'This must be the criterion'
+                                : isCross    ? 'Past query: FAIL on this rule'
+                                :               'Still possible';
+                    const wouldPass = showArrow && proposal && opt.test(proposal);
+                    const preview = el('span', {
+                        class: 'preview' + (wouldPass ? ' pass' : ' hidden-preview'),
+                        title: wouldPass ? 'Current number would PASS this rule' : '',
+                        html: wouldPass ? PREVIEW_ARROW_SVG : '',
+                    });
+
+                    // Marker semantics: pane death wins over per-option
+                    // crosses so the entire dead pane reads ⊘ uniformly.
+                    //   ✓ confirmed/passed,
+                    //   ⊘ pane is dead (extreme mode — entire card is out),
+                    //   ✗ ruled out by a past query.
+                    const markerChar = (isConfirmed || isPassed) ? '✓'
+                                     : paneDead                  ? '⊘'
+                                     : isCross                   ? '✗'
+                                     :                             '';
+                    const userState = um[`${i}:${paneIdx}:${oi}`] || '';
+                    // Auto-deduction marker is omitted entirely when the
+                    // setting is off — neither the badge nor its box show.
+                    // The user-marker checkbox on the left remains.
+                    const children = [
+                        userMarkerSpan(userState),
+                        ...(showAuto ? [el('span', { class: 'marker' }, markerChar)] : []),
+                        el('span', { class: 'vopt-label' }, labelToColoredNodes(opt.label)),
+                        preview,
+                    ];
+                    /* istanbul ignore next -- multi-arm conditional class string; not all branches fire in any single test */
+                    optsList.appendChild(el('li',
+                        { class: 'vopt'
+                            + (showAuto && isConfirmed ? ' confirmed' : '')
+                            + (showAuto && isCross    ? ' ruledout' : '')
+                            + (showAuto && paneDead && !isCross && !isConfirmed && !isPassed ? ' pane-dead-opt' : ''),
+                          'data-vidx': i, 'data-oi': oi, 'data-cidx': paneIdx,
+                          title: showAuto ? title : 'Set your own marker on the left' },
+                        ...children,
+                    ));
                 });
 
-                // Left marker reflects accumulated query knowledge:
-                //   ✓ confirmed / passed,   ✗ ruled out by a past query.
-                // We deliberately don't apply ANY "ruled out" styling to the
-                // row itself (no strike-through, no dimming) — only the
-                // marker itself signals the verdict.
-                const markerChar = (isConfirmed || isPassed) ? '✓'
-                                 : isCross                   ? '✗'
-                                 :                             '';
-                const li = el('li',
-                    { class: 'vopt'
-                        + (isConfirmed ? ' confirmed' : '')
-                        + (isCross    ? ' ruledout' : ''),
-                      'data-vidx': i, 'data-oi': oi,
-                      title },
-                    el('span', { class: 'marker' }, markerChar),
-                    el('span', { class: 'vopt-label' }, labelToColoredNodes(opt.label)),
-                    preview,
+                if (isExtreme) {
+                    // Two-pane layout: each pane gets its own topic header.
+                    return el('div',
+                        { class: 'vcard-pane' + (paneDead ? ' pane-dead' : ''),
+                          'data-cidx': paneIdx },
+                        el('div', { class: 'vpane-topic' }, labelToColoredNodes(def.topic)),
+                        optsList,
+                    );
+                }
+                // Normal mode: no pane wrapper, options list goes straight in.
+                return optsList;
+            };
+
+            const head = isExtreme
+                ? el('div', { class: 'vcard-head' },
+                    el('div', { class: 'vletter' }, verifierLetter(i)),
+                    el('div', { class: 'vtopic vtopic-extreme' },
+                        el('span', { class: 'extreme-tag' }, 'EXTREME'),
+                        ' — one of the two cards below is real'),
+                    el('button', { class: 'vbtn', 'data-ask': i,
+                        onclick: () => onAsk(i)
+                    }, 'Ask'),
+                )
+                : el('div', { class: 'vcard-head' },
+                    el('div', { class: 'vletter' }, verifierLetter(i)),
+                    el('div', { class: 'vtopic' }, labelToColoredNodes(CARDS_BY_ID[panes[0].id].topic)),
+                    el('button', { class: 'vbtn', 'data-ask': i,
+                        onclick: () => onAsk(i)
+                    }, 'Ask'),
                 );
-                optsList.appendChild(li);
-            });
 
-            const head = el('div', { class: 'vcard-head' },
-                el('div', { class: 'vletter' }, VERIFIER_LETTERS[i]),
-                el('div', { class: 'vtopic' }, labelToColoredNodes(def.topic)),
-                el('button', { class: 'vbtn', 'data-ask': i,
-                    onclick: () => onAsk(i)
-                }, 'Ask'),
-            );
-
-            const card_el = el('div', { class: 'verifier-card', 'data-vidx': i },
+            const card_el = el('div',
+                { class: 'verifier-card' + (isExtreme ? ' extreme' : ''),
+                  'data-vidx': i },
                 head,
-                optsList,
+                ...(isExtreme
+                    ? [el('div', { class: 'vcard-panes' }, buildPane(0), buildPane(1))]
+                    : [buildPane(0)]),
             );
 
             if (verifierQueries.length) {
                 const log = el('div', { class: 'vqlog' });
                 verifierQueries.forEach(q => {
-                    // The "active" option at ask time is the one whose
-                    // predicate matched the number — by the 1-● Ask rule
-                    // there's always exactly one. Show its label so the
-                    // log reads as a complete deduction sentence.
-                    const activeOpts = def.options.filter(o => o.test(q.proposal));
-                    const activeLabel = activeOpts.length === 1
-                        ? activeOpts[0].label : null;
+                    // Round + proposal + verdict only — the rule label
+                    // used to hint which option was queried, but that
+                    // gives away information that the player should
+                    // deduce, especially in Hard's combo verifiers.
+                    // "Round N" tag is clickable: opens the per-round
+                    // detail modal with a verifier-card snapshot.
+                    const queryGlobalIdx = queries.indexOf(q);
                     const row = el('div', {},
-                        `Round ${q.round}: `,
+                        el('span', {
+                            class: 'vqlog-round',
+                            'data-vidx': i,
+                            'data-qidx': queryGlobalIdx,
+                            title: 'Click to see this round\'s detail',
+                        }, `Round ${q.round}`),
+                        document.createTextNode(': '),
                         formatProposalNode(q.proposal),
+                        document.createTextNode(' → '),
+                        el('span', { class: q.result ? 'ok' : 'fail' },
+                            q.result ? '✓' : '✗'),
                     );
-                    if (activeLabel) {
-                        row.appendChild(document.createTextNode(' → '));
-                        row.appendChild(el('span', { class: 'vqlog-rule' },
-                            labelToColoredNodes(activeLabel)));
-                    }
-                    row.appendChild(document.createTextNode(' → '));
-                    row.appendChild(el('span',
-                        { class: q.result ? 'ok' : 'fail' },
-                        q.result ? '✓' : '✗'));
                     log.appendChild(row);
                 });
                 card_el.appendChild(log);
@@ -321,36 +468,56 @@ class UI {
     }
 
     // Recompute the live preview marker on every verifier option without
-    // rebuilding the whole verifier row. Cheap; safe to call on each dial tick.
-    updateVerifierPreviews(puzzle, deductions, proposal) {
+    // rebuilding the whole verifier row. Cheap; safe to call on each dial
+    // tick. In extreme mode both panes get scanned.
+    updateVerifierPreviews(puzzle, deductions, proposal, showPreviewArrow) {
+        const showArrow = showPreviewArrow !== false;
         puzzle.cards.forEach((card, i) => {
-            const def = CARDS_BY_ID[card.id];
-            const ded = deductions[i] || { crossed: new Set(), passed: new Set(), confirmed: null };
-            def.options.forEach((opt, oi) => {
-                const node = document.querySelector(
-                    `.verifier-card[data-vidx="${i}"] .vopt[data-oi="${oi}"] .preview`);
-                if (!node) return;
-                // Right side only ever shows the live ← arrow when the
-                // current number activates this option, regardless of any
-                // past verdict. Past verdicts (✓/✗) live in the LEFT marker,
-                // which is set in renderVerifiers and not touched on ticks.
-                const ok = !!opt.test(proposal);
-                if (ok) {
-                    node.className = 'preview pass';
-                    node.innerHTML = PREVIEW_ARROW_SVG;
-                    node.title = 'Current number would PASS this rule';
-                } else {
-                    node.className = 'preview hidden-preview';
-                    node.innerHTML = '';
-                    node.title = '';
-                }
+            const panes = paneListOf(card);
+            panes.forEach((pane, pi) => {
+                const def = CARDS_BY_ID[pane.id];
+                def.options.forEach((opt, oi) => {
+                    // The non-extreme selector form (no data-cidx) is the
+                    // hot path on every dial tick in normal-mode games.
+                    /* istanbul ignore next -- both branches are exercised across the suite; nyc occasionally misses the conditional itself in browser-instrumented runs */
+                    const sel = panes.length > 1
+                        ? `.verifier-card[data-vidx="${i}"] .vopt[data-cidx="${pi}"][data-oi="${oi}"] .preview`
+                        : `.verifier-card[data-vidx="${i}"] .vopt[data-oi="${oi}"] .preview`;
+                    const node = document.querySelector(sel);
+                    if (!node) return;
+                    const ok = showArrow && !!opt.test(proposal);
+                    if (ok) {
+                        node.className = 'preview pass';
+                        node.innerHTML = PREVIEW_ARROW_SVG;
+                        node.title = 'Current number would PASS this rule';
+                    } else {
+                        node.className = 'preview hidden-preview';
+                        node.innerHTML = '';
+                        node.title = '';
+                    }
+                });
             });
         });
     }
 
-    setVerifierAskEnabled(i, enabled) {
+    // In-place refresh of a single user-marker cell so cycling doesn't
+    // tear down the whole verifier row on every click.
+    updateUserMarker(vi, pi, oi, state) {
+        const node = document.querySelector(
+            `.verifier-card[data-vidx="${vi}"] .vopt[data-cidx="${pi}"][data-oi="${oi}"] .user-marker`);
+        if (!node) return;
+        /* istanbul ignore next -- USER_MARKER_GLYPH lookup; the `|| ''` fallback is defensive */
+        node.textContent = USER_MARKER_GLYPH[state || ''] || '';
+        /* istanbul ignore next -- conditional class string for empty vs marked state */
+        node.className = 'user-marker' + (state ? ' um-' + state : '');
+    }
+
+    setVerifierAskEnabled(i, enabled, reason) {
         const btn = $(`.verifier-card[data-vidx="${i}"] .vbtn`);
-        if (btn) btn.disabled = !enabled;
+        if (!btn) return;
+        btn.disabled = !enabled;
+        // Native browser tooltip on hover — explains the grey-out cause.
+        btn.title = enabled ? '' : (reason || 'Ask is currently unavailable.');
     }
 
     setAllAskButtons(enabled) {
@@ -386,11 +553,18 @@ class UI {
             ));
         } else {
             queries.forEach(q => {
-                const def = CARDS_BY_ID[puzzle.cards[q.verifierIdx].id];
-                // The ● option at ask time — guaranteed unique by the 1-●
-                // Ask rule, so this never shows '—' for a real query.
-                const activeOpts = def.options.filter(o => o.test(q.proposal));
-                const activeLabel = activeOpts.length === 1 ? activeOpts[0].label : null;
+                // The ● option at ask time — guaranteed unique across both
+                // panes by the 1-● Ask rule, so this never shows '—' for a
+                // real query. In extreme mode we scan both panes.
+                const panes = paneListOf(puzzle.cards[q.verifierIdx]);
+                let activeLabel = null, found = 0;
+                for (const pane of panes) {
+                    const def = CARDS_BY_ID[pane.id];
+                    for (const o of def.options) {
+                        if (o.test(q.proposal)) { activeLabel = o.label; found++; }
+                    }
+                }
+                if (found !== 1) activeLabel = null;
                 body.appendChild(el('tr', {},
                     el('td', { class: 'col-round' }, String(q.round)),
                     el('td', { class: 'prop-cell' }, formatProposalNode(q.proposal)),
@@ -483,6 +657,115 @@ class UI {
         t.appendChild(body);
     }
 
+    // ----- round-detail modal -----
+    // Renders a snapshot of one verifier card AFTER the given query: the
+    // proposal asked, the options with arrows always on (independent of
+    // the live-arrow setting), the user-markers as they currently stand,
+    // and the auto-markers derived from queries up to AND INCLUDING this
+    // one (so the player can see how their reasoning evolved round by
+    // round).
+    renderRoundDetailModal({ verifierLetter, round, result, proposal, card,
+                             paneDeductions, userMarkers, verifierIdx, showAuto }) {
+        $('#round-detail-title').textContent =
+            `Verifier ${verifierLetter} · Round ${round}`;
+        $('#round-detail-subtitle').textContent =
+            `Verifier answered ${result ? '✓ YES' : '✗ NO'} on the number below.`;
+        const propEl = $('#round-detail-proposal');
+        propEl.innerHTML = '';
+        propEl.appendChild(formatProposalNode(proposal));
+        const cardEl = $('#round-detail-card');
+        cardEl.innerHTML = '';
+        const panes = paneListOf(card);
+        /* istanbul ignore next -- callers (openRoundDetail) always pass a userMarkers object; the `|| {}` fallback is defensive */
+        const um    = userMarkers || {};
+        const isExtremeCard = panes.length > 1;
+        // Build a real .verifier-card so the existing CSS selectors
+        // (.verifier-card .vopt, .verifier-card .marker, etc.) apply
+        // unchanged — without this wrapper the snapshot renders as
+        // unstyled raw <ul>/<li>.
+        // No data-vidx — would collide with the main #verifier-row selectors
+        // used by updateUserMarker and the delegated click handler. The
+        // modal snapshot is a read-only view, so it doesn't need them.
+        const wrapper = el('div',
+            { class: 'verifier-card rd-snapshot' + (isExtremeCard ? ' extreme' : '') });
+        if (isExtremeCard) {
+            const head = el('div', { class: 'vcard-head' },
+                el('div', { class: 'vletter' }, verifierLetter),
+                el('div', { class: 'vtopic vtopic-extreme' },
+                    el('span', { class: 'extreme-tag' }, 'EXTREME'),
+                    ' — one of the two cards below is real'));
+            wrapper.appendChild(head);
+        } else {
+            const head = el('div', { class: 'vcard-head' },
+                el('div', { class: 'vletter' }, verifierLetter),
+                el('div', { class: 'vtopic' }, labelToColoredNodes(CARDS_BY_ID[panes[0].id].topic)));
+            wrapper.appendChild(head);
+        }
+        const panesWrap = isExtremeCard
+            ? el('div', { class: 'vcard-panes' })
+            : null;
+        panes.forEach((pane, paneIdx) => {
+            const def  = CARDS_BY_ID[pane.id];
+            const pded = paneDeductions.panes[paneIdx];
+            const paneDead = pded.paneStatus === 'dead';
+            const splitAt = (def.comboSrcA !== undefined && CARDS_BY_ID[def.comboSrcA])
+                ? CARDS_BY_ID[def.comboSrcA].options.length
+                : -1;
+            const optsList = el('ul', { class: 'voptions' });
+            def.options.forEach((opt, oi) => {
+                if (oi === splitAt) {
+                    optsList.appendChild(el('li', { class: 'vopt-or-sep' },
+                        el('span', { class: 'or-sep-line' }),
+                        el('span', { class: 'or-sep-label' }, 'OR'),
+                        el('span', { class: 'or-sep-line' })));
+                }
+                const userState = um[`${verifierIdx}:${paneIdx}:${oi}`] || '';
+                const wouldPass = opt.test(proposal);
+                const preview = el('span', {
+                    class: 'preview' + (wouldPass ? ' pass' : ' hidden-preview'),
+                    html: wouldPass ? PREVIEW_ARROW_SVG : '',
+                });
+                const isCross    = pded.crossed.has(oi);
+                const isPassed   = pded.passed && pded.passed.has(oi);
+                const isConfirmed = pded.confirmed === oi;
+                let markerChar = '';
+                /* istanbul ignore next -- showAuto-off (settings toggle) branch + paneDead ternary; the modal snapshot doesn't trigger every arm */
+                if (showAuto) {
+                    markerChar = (isConfirmed || isPassed) ? '✓'
+                               : paneDead                  ? '⊘'
+                               : isCross                   ? '✗'
+                               :                             '';
+                }
+                const children = [
+                    userMarkerSpan(userState),
+                    /* istanbul ignore next */
+                    showAuto ? el('span', { class: 'marker' }, markerChar) : null,
+                    el('span', { class: 'vopt-label' }, labelToColoredNodes(opt.label)),
+                    preview,
+                ];
+                /* istanbul ignore next -- multi-arm class string; arms toggle on showAuto + isConfirmed + isCross + paneDead combinations not all triggered in a single test */
+                optsList.appendChild(el('li',
+                    { class: 'vopt'
+                        + (showAuto && isConfirmed ? ' confirmed' : '')
+                        + (showAuto && isCross && !paneDead ? ' ruledout' : '') },
+                    ...children));
+            });
+            if (isExtremeCard) {
+                /* istanbul ignore next -- paneDead && showAuto only fires when an extreme pane has been killed AND auto-deduction is on; round-detail tests don't always set that combo */
+                panesWrap.appendChild(el('div',
+                    { class: 'vcard-pane' + (paneDead && showAuto ? ' pane-dead' : ''),
+                      'data-cidx': paneIdx },
+                    el('div', { class: 'vpane-topic' }, labelToColoredNodes(def.topic)),
+                    optsList));
+            } else {
+                wrapper.appendChild(optsList);
+            }
+        });
+        if (panesWrap) wrapper.appendChild(panesWrap);
+        cardEl.appendChild(wrapper);
+        this.openModal('round-detail-modal');
+    }
+
     // ----- deduction trace modal -----
     // `trace` comes from Game#deduceFor. Lays out a short status line and a
     // list of "evidence" rows — past queries that produced the verdict, or,
@@ -495,6 +778,14 @@ class UI {
         sub.appendChild(el('span', { class: 'verifier-tag' }, `Verifier ${trace.verifierLetter}`));
         sub.appendChild(document.createTextNode(' · '));
         sub.appendChild(labelToColoredNodes(trace.label));
+        // Extreme-mode subtitle decoration: tag the option with its pane
+        // ("card A" / "card B") so the player can map back to what they
+        // see on the verifier slot.
+        if (trace.isExtreme) {
+            sub.appendChild(document.createTextNode(' · '));
+            sub.appendChild(el('span', { class: 'pane-tag' },
+                `card ${trace.paneIdx === 0 ? 'A' : 'B'}`));
+        }
 
         const status = $('#ded-status');
         status.innerHTML = '';
@@ -573,9 +864,56 @@ class UI {
             return this.openModal('deduction-modal');
         }
 
-        // Fallback / unknown — shouldn't be clickable since marker is empty.
+        if (trace.status === 'pane-dead') {
+            status.className = 'ded-status is-no';
+            status.textContent = '⊘ This card was eliminated as the active criterion.';
+            body.appendChild(el('p', { class: 'ded-explainer' },
+                'In Extreme mode each verifier shows two cards but tests only one. ' +
+                'Past queries have ruled out every option on this card as the criterion, ' +
+                'so this whole card cannot be the one being tested — making every option on it moot.'));
+            return this.openModal('deduction-modal');
+        }
+
+        // 'unknown' — the marker is empty. With at least one past query
+        // on the verifier, explain why none of them auto-deduced this
+        // option (the click handler only opens the modal in that case).
         status.className = 'ded-status';
-        status.textContent = 'No deduction yet — no past query has touched this option.';
+        status.textContent = 'No deduction yet on this option.';
+        /* istanbul ignore else -- the click handler only opens this modal when verifierQueries is non-empty; the else is the "no queries yet" instructive copy */
+        if (trace.verifierQueries && trace.verifierQueries.length) {
+            body.appendChild(el('p', { class: 'ded-explainer' },
+                /* istanbul ignore next -- isMultiOption true/false split across combo + classic-only verifiers */
+                trace.isMultiOption
+                    ? 'Auto-deduction only marks an option when EXACTLY ONE option matched your number and the verifier answered ✓. This is a combo (mystery) verifier — most queries match multiple options at once, so its YES/NO verdicts almost never pin a single option automatically.'
+                    : 'Auto-deduction only marks an option when EXACTLY ONE option matched your number AND the verifier answered ✓. Past queries that don\'t meet both conditions are kept for reference but don\'t place any marker.'));
+            body.appendChild(el('p', { class: 'ded-explainer' }, 'Past queries on this verifier:'));
+            const ul = el('ul', { class: 'ev-list' });
+            trace.verifierQueries.forEach(q => {
+                /* istanbul ignore next -- per-key note dispatch; 'this-confirmed'/'other-confirmed'/'unmark' are dead branches (TRUE+1-● confirms the option so the marker IS set; unknown branch only fires when marker is empty), but the lookup map evaluates all keys regardless */
+                const note = ({
+                    'this-confirmed':  'matched THIS option — should be ✓ (refresh?)',
+                    'other-confirmed': 'matched a different option and got ✓ — that other option is the criterion, so THIS one is implied ruled out',
+                    'false-1pin':      trace.isMultiOption
+                        ? 'a single option matched but the verifier said NO — for combo verifiers the answer might have been about a different option, so we can\'t rule it out'
+                        : 'a single option matched but the verifier said NO — THAT matched option is ruled out (should be ✗ on it)',
+                    'no-pin':          'no option matched your number — gives no per-option info',
+                    'multi-pin':       'multiple options matched at once — verdict can\'t be pinned to any single one',
+                    'unmark':          '—',
+                })[q.why] || '—';
+                /* istanbul ignore next -- per-row class string conditionals for ev-ok/ev-no + ✓/✗; the modal only opens with a mix that may not exercise every arm in one test */
+                ul.appendChild(el('li', { class: q.result ? 'ev-ok' : 'ev-no' },
+                    el('span', { class: 'ev-round' }, `Round ${q.round}`),
+                    el('span', { class: 'ev-prop' }, formatProposalNode(q.proposal)),
+                    el('span', { class: 'ev-arrow' }, '→'),
+                    el('span', { class: q.result ? 'ev-result ok' : 'ev-result fail' }, q.result ? '✓' : '✗'),
+                    el('span', { class: 'ev-note' }, note),
+                ));
+            });
+            body.appendChild(ul);
+        } else {
+            body.appendChild(el('p', { class: 'ded-explainer' },
+                'No past query has touched this option yet. Ask the verifier with a number that activates exactly this option to learn more.'));
+        }
         return this.openModal('deduction-modal');
     }
 
@@ -717,12 +1055,36 @@ class UI {
         puzzle.cards.forEach((card, i) => {
             const def = CARDS_BY_ID[card.id];
             const opt = def.options[card.opt];
-            list.appendChild(el('li', {},
-                el('span', { class: 'verifier-tag' }, VERIFIER_LETTERS[i]),
-                labelToColoredNodes(def.topic),
-                ': ',
-                el('strong', {}, labelToColoredNodes(opt.label)),
-            ));
+            const li = el('li', { class: card.redHerring ? 'end-herring' : '' });
+            if (card.redHerring) {
+                li.appendChild(el('span', { class: 'verifier-tag' }, verifierLetter(i)));
+                li.appendChild(el('span', { class: 'herring-tag' }, 'RED HERRING'));
+                li.appendChild(el('span', { class: 'herring-note' },
+                    ' — not a real constraint. Its "criterion" (',
+                ));
+                li.appendChild(labelToColoredNodes(opt.label));
+                li.appendChild(document.createTextNode(') was chosen to never match the code, so this verifier always answered NO on the solution.'));
+            } else {
+                li.appendChild(el('span', { class: 'verifier-tag' }, verifierLetter(i)));
+                li.appendChild(labelToColoredNodes(def.topic));
+                li.appendChild(document.createTextNode(': '));
+                li.appendChild(el('strong', {}, labelToColoredNodes(opt.label)));
+            }
+            // Extreme: also show the decoy that was sitting next to the
+            // active criterion. Helps the player understand what they were
+            // fighting against, especially when they fell for the bluff.
+            if (card.altId !== undefined) {
+                const adef = CARDS_BY_ID[card.altId];
+                const aopt = adef.options[card.altOpt];
+                li.appendChild(el('div', { class: 'end-decoy' },
+                    el('span', { class: 'decoy-tag' }, 'decoy'),
+                    ' ',
+                    labelToColoredNodes(adef.topic),
+                    ': ',
+                    el('em', {}, labelToColoredNodes(aopt.label)),
+                ));
+            }
+            list.appendChild(li);
         });
 
         $('#end-share-url').value = shareUrl;
@@ -783,12 +1145,33 @@ function classifyWin(verifiers, rounds, questions, qpr) {
     return { ...WIN_TIERS[idx], index: idx, score, efficiency: eff, pacing: pace, minRounds };
 }
 
+// Hand-set "user marker" checkbox shown to the LEFT of the auto-deduction
+// marker on every verifier option. Player clicks to cycle the state.
+const USER_MARKER_GLYPH = { '': '', check: '✓', cross: '✗', question: '?' };
+function userMarkerSpan(state) {
+    const glyph = USER_MARKER_GLYPH[state || ''] || '';
+    return el('span', {
+        class: 'user-marker' + (state ? ' um-' + state : ''),
+        title: 'Click to cycle: empty → ✓ → ✗ → ? → empty',
+        role: 'button',
+        'aria-label': state ? `your marker: ${state}` : 'set your marker',
+    }, glyph);
+}
+
 // Inline SVG arrow used as the "active option" preview marker on verifier
 // cards. Pointing left so it visually reads as "← this rule fits the number".
 const PREVIEW_ARROW_SVG =
     '<svg class="arrow-svg" viewBox="0 0 16 16" aria-hidden="true">' +
     '<path d="M14 8 L3 8 M7 4 L3 8 L7 12" fill="none" stroke="currentColor" ' +
     'stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+// Magnifier icon shown on each level-select option. Click opens the
+// level-info modal listing the verifier cards available in that level.
+const LEVEL_INFO_MAGNIFIER_SVG =
+    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" ' +
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+    'stroke-linejoin="round" aria-hidden="true">' +
+    '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>';
 
 // Replace every occurrence of a configured color name in `label` with a small
 // colored dot (`<span class="color-dot blue"/>` etc). Returns a DocumentFragment
@@ -814,13 +1197,43 @@ function labelToColoredNodes(label) {
     return frag;
 }
 
+// Like labelToColoredNodes but ALSO highlights the standalone word
+// "color" (case-insensitive) with the .color-placeholder class — used by
+// the level-info modal for colorParam cards so the parametric nature of
+// the rule reads at a glance ("A specific COLOR is less than 3").
+function highlightColorWord(label) {
+    const frag = document.createDocumentFragment();
+    const colors = GAME_CONFIG.colors;
+    const re = new RegExp('\\b(' + ['color', ...colors].join('|') + ')\\b', 'gi');
+    let lastIdx = 0, m;
+    while ((m = re.exec(label)) !== null) {
+        if (m.index > lastIdx) {
+            frag.appendChild(document.createTextNode(label.slice(lastIdx, m.index)));
+        }
+        const tok = m[1].toLowerCase();
+        if (tok === 'color') {
+            frag.appendChild(el('span', { class: 'color-placeholder' }, m[1]));
+        } else {
+            frag.appendChild(el('span', { class: `color-dot ${tok}`, title: tok }));
+        }
+        lastIdx = m.index + m[0].length;
+    }
+    if (lastIdx < label.length) {
+        frag.appendChild(document.createTextNode(label.slice(lastIdx)));
+    }
+    return frag;
+}
+
 function formatProposalNode(proposal) {
-    // One small span per color slot — coloring driven by the slot name so the
-    // helper keeps working when GAME_CONFIG.colors changes.
-    const span = el('span', {});
+    // One small "chip" per color slot — a colored dot followed by the
+    // digit. The chips read naturally as a row (no separator) since each
+    // dot anchors the start of its slot visually.
+    const span = el('span', { class: 'proposal-chips' });
     GAME_CONFIG.colors.forEach((c, i) => {
-        if (i > 0) span.appendChild(document.createTextNode('-'));
-        span.appendChild(el('span', { class: 'p' + c[0] }, String(proposal[i])));
+        span.appendChild(el('span', { class: 'pchip' },
+            el('span', { class: `color-dot ${c}` }),
+            el('span', { class: 'p' + c[0] }, String(proposal[i])),
+        ));
     });
     return span;
 }
