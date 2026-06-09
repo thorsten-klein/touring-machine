@@ -295,12 +295,16 @@ class UI {
     }
 
     // ----- verifier cards row -----
-    renderVerifiers(puzzle, deductions, queries, onAsk, proposal, userMarkers, autoDeduce, showPreviewArrow) {
+    renderVerifiers(puzzle, deductions, queries, onAsk, proposal, userMarkers, autoDeduce, showPreviewArrow, training) {
         const row = $('#verifier-row');
         row.innerHTML = '';
         const um = userMarkers || {};
         const showAuto  = autoDeduce !== false;
         const showArrow = showPreviewArrow !== false;
+        // Training mode: criteria are revealed up-front, asking is disabled,
+        // so we drop the Ask button per-card entirely (the player would have
+        // nothing useful to do with it).
+        const isTraining = !!training;
         puzzle.cards.forEach((card, i) => {
             const verifierQueries = queries.filter(q => q.verifierIdx === i);
             const verDed = deductions[i] || { panes: [], isExtreme: false };
@@ -392,22 +396,21 @@ class UI {
                 return optsList;
             };
 
+            const askBtn = isTraining ? null : el('button', { class: 'vbtn', 'data-ask': i,
+                onclick: () => onAsk(i)
+            }, 'Ask');
             const head = isExtreme
                 ? el('div', { class: 'vcard-head' },
                     el('div', { class: 'vletter' }, verifierLetter(i)),
                     el('div', { class: 'vtopic vtopic-extreme' },
                         el('span', { class: 'extreme-tag' }, 'EXTREME'),
                         ' — one of the two cards below is real'),
-                    el('button', { class: 'vbtn', 'data-ask': i,
-                        onclick: () => onAsk(i)
-                    }, 'Ask'),
+                    askBtn,
                 )
                 : el('div', { class: 'vcard-head' },
                     el('div', { class: 'vletter' }, verifierLetter(i)),
                     el('div', { class: 'vtopic' }, labelToColoredNodes(CARDS_BY_ID[panes[0].id].topic)),
-                    el('button', { class: 'vbtn', 'data-ask': i,
-                        onclick: () => onAsk(i)
-                    }, 'Ask'),
+                    askBtn,
                 );
 
             const card_el = el('div',

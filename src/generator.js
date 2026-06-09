@@ -229,6 +229,12 @@ const LEVELS = {
                description:'Same as Classic, but using OR-combo cards' },
     EXTREME: { id:'EXTREME', label:'Extreme', verifiers:Math.min(5, GAME_CONFIG.maxVerifiers), extreme:true,
                description:'5 real verifiers (each shows TWO cards, only one is real) PLUS a 6th red-herring verifier' },
+    // Training: same generator pool as Classic, but the active criterion on
+    // every verifier is revealed up-front. The player can't ask — they just
+    // deduce the unique code from the visible criteria and submit. Useful
+    // as practice for the deduction half of the game.
+    TRAINING:{ id:'TRAINING',label:'Training', verifiers:5, training:true,
+               description:'Criteria are revealed — deduce the code without asking. Pick verifier count above.' },
     CUSTOM:  { id:'CUSTOM',  label:'Custom level', verifiers:0,
                description:'Pick your own digit range and verifier count' },
     // "Create game for my number" — the player picks a code AND a level
@@ -273,6 +279,12 @@ function generatePuzzle(level, seed, opts = {}) {
     const hardplus = opts.hardplus !== undefined
         ? !!opts.hardplus
         : !!(LEVELS[level] && LEVELS[level].hardplus);
+    // Training mode: criteria revealed, no asking. Pure display flag — has
+    // no effect on puzzle generation, just rides along in puzzle.config so
+    // game.js / state persistence / shared URLs all know to render it.
+    const training = opts.training !== undefined
+        ? !!opts.training
+        : !!(LEVELS[level] && LEVELS[level].training);
     // Default budget bumped to account for the stricter `isValidPuzzle`
     // constraints (solution must activate exactly one option per card AND no
     // two cards may share an option prefix). HARD (6 verifiers) needs a few
@@ -374,6 +386,7 @@ function generatePuzzle(level, seed, opts = {}) {
                 questionsPerRound,
                 extreme,
                 hardplus,
+                training,
             },
         };
         if (!isValidPuzzle(puzzle)) continue;
@@ -533,11 +546,11 @@ function attachDecoys(puzzle, rng, opts = {}) {
 // and decodes back as CLASSIC. The cards and solution are identical;
 // only the label differs.
 const LEVEL_CHAR = {
-    CLASSIC:'L', HARD:'H', EXTREME:'X',
+    CLASSIC:'L', HARD:'H', EXTREME:'X', TRAINING:'T',
     EASY:'L', MEDIUM:'L', HARDPLUS:'H',
 };
 const CHAR_LEVEL = {
-    L:'CLASSIC',  X:'EXTREME',  H:'HARD',
+    L:'CLASSIC',  X:'EXTREME',  H:'HARD',  T:'TRAINING',
     // Legacy aliases:
     E:'CLASSIC',  // old Easy   (4 verifiers)
     M:'CLASSIC',  // old Medium (5 verifiers)
@@ -652,6 +665,7 @@ function decodeGameId(id) {
         throw new Error('Extreme marker disagrees with verifier segments');
     }
     const hardplus = !!(LEVELS[level] && LEVELS[level].hardplus);
+    const training = !!(LEVELS[level] && LEVELS[level].training);
     const puzzle = {
         level, seed: null, cards,
         config: customConfig
@@ -662,6 +676,7 @@ function decodeGameId(id) {
                 questionsPerRound: customConfig.questionsPerRound,
                 extreme: customConfig.extreme,
                 hardplus: false,
+                training: false,
               }
             : {
                 digitMin: GAME_CONFIG.digitMin,
@@ -670,6 +685,7 @@ function decodeGameId(id) {
                 questionsPerRound: GAME_CONFIG.questionsPerRound,
                 extreme,
                 hardplus,
+                training,
               },
     };
     const sols = solutionsFor(puzzle);

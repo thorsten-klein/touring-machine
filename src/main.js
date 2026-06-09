@@ -16,17 +16,20 @@ document.addEventListener('DOMContentLoaded', () => {
         LEVELS.HARD,
         LEVELS.EXTREME,
         { separator: 'Others' },
+        LEVELS.TRAINING,
         LEVELS.CUSTOM,
         LEVELS.MYCODE,
     ];
     ui.wireClassicStepper({ min: 3, max: 7, initial: 5 });
     ui.renderLevelSelect(items,
         (lvId) => {
-            if (lvId === 'CUSTOM')       game.openCustomLevelModal();
-            else if (lvId === 'MYCODE')  game.openMyCodeModal();
-            else if (lvId === 'CLASSIC') game.startNew('CLASSIC', undefined,
-                                            { verifiers: ui.getClassicVerifiers() });
-            else                         game.startNew(lvId);
+            if (lvId === 'CUSTOM')        game.openCustomLevelModal();
+            else if (lvId === 'MYCODE')   game.openMyCodeModal();
+            else if (lvId === 'CLASSIC')  game.startNew('CLASSIC', undefined,
+                                              { verifiers: ui.getClassicVerifiers() });
+            else if (lvId === 'TRAINING') game.startNew('TRAINING', undefined,
+                                              { verifiers: ui.getClassicVerifiers() });
+            else                          game.startNew(lvId);
         },
         (lvId) => game.openLevelInfo(lvId),
         () => {
