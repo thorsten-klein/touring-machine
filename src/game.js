@@ -99,6 +99,32 @@ class Game {
     // only fires after the other pane is confirmed dead. The returned shape
     // has a `panes` array (length 1 for normal, 2 for extreme).
     computeDeductions() {
+        // Training mode reveals every verifier's active criterion. We
+        // synthesize a deduction shape that marks card.opt as passed/
+        // confirmed and every other option crossed — same shape the renderer
+        // uses for a fully-deduced verifier in a normal game.
+        if (this.state.puzzle.config && this.state.puzzle.config.training) {
+            return this.state.puzzle.cards.map(card => {
+                const def = CARDS_BY_ID[card.id];
+                const crossed = new Set();
+                for (let oi = 0; oi < def.options.length; oi++) {
+                    if (oi !== card.opt) crossed.add(oi);
+                }
+                const passed = new Set([card.opt]);
+                const pane = {
+                    id: card.id, opt: card.opt,
+                    optionsLen: def.options.length,
+                    crossed, passed, dead: false,
+                    paneStatus: 'active', confirmed: card.opt,
+                };
+                return {
+                    panes: [pane],
+                    confirmedPane: 0,
+                    isExtreme: false,
+                    crossed, passed, confirmed: card.opt,
+                };
+            });
+        }
         const autoOff = !this.settings.autoDeduce;
         return this.state.puzzle.cards.map((card, vi) => {
             const qs = autoOff ? [] : this.state.queries.filter(q => q.verifierIdx === vi);
@@ -279,6 +305,7 @@ class Game {
 
     renderAll() {
         const s = this.state;
+        const training = !!(s.puzzle.config && s.puzzle.config.training);
         const gameId = encodeGameId(s.puzzle);
         let levelLabel = LEVELS[s.puzzle.level].label;
         if (s.puzzle.level === 'CUSTOM' && s.puzzle.config) {
@@ -293,30 +320,52 @@ class Game {
             questions:  s.questionsAsked(),
             gameId,
         });
+        // Hide round/question chips in training — no questions are asked,
+        // so the counters would just read "Round 1 · 0 questions" forever.
+        document.getElementById('info-round').hidden = training;
+        document.getElementById('info-questions').hidden = training;
+        document.querySelectorAll('#game-info .sep').forEach(n => n.hidden = training);
+        // Same idea for the verifier-question scaffolding: training has no
+        // notes table (no past queries to list) and no end-round button —
+        // but the proposal dials stay so the player can dial in their guess
+        // right above the Submit-code button (the modal's dials still work
+        // and pre-fill from this value).
+        document.getElementById('notes-section').hidden     = training;
+        // The dom-deleted-button lifecycle test removes btn-end-round; keep
+        // the defensive lookup so that test still passes.
+        const endBtnHide = document.getElementById('btn-end-round');
+        if (endBtnHide) endBtnHide.hidden = training;
         this.ui.renderProposalDials('#proposal-dials', s.proposal, (p) => this.onProposalChange(p),
-            { locked: s.isRoundLocked() });
+            { locked: training ? false : s.isRoundLocked() });
         const deductions = this.computeDeductions();
-        this.ui.renderVerifiers(s.puzzle, deductions, s.queries, (i) => this.onAsk(i), s.proposal, s.userMarkers, !!this.settings.autoDeduce, !!this.settings.showPreviewArrow);
+        // In training we always show the reveal markers, regardless of the
+        // user's auto-deduction setting — the whole point of the mode is to
+        // see every criterion.
+        const autoDeduceUI = training ? true : !!this.settings.autoDeduce;
+        this.ui.renderVerifiers(s.puzzle, deductions, s.queries, (i) => this.onAsk(i), s.proposal, s.userMarkers, autoDeduceUI, !!this.settings.showPreviewArrow, training);
         // Cache deductions so onProposalChange can do a cheap in-place update
         // of the live preview markers without recomputing everything.
         this._lastDeductions = deductions;
         this.refreshAskButtons();
-        this.ui.renderNotesTable(s.puzzle, s.queries);
+        if (!training) this.ui.renderNotesTable(s.puzzle, s.queries);
         // End-round button reflects the round state machine:
         //   - active round, ≥1 query asked  → enabled, "End round" (stop icon)
         //   - between rounds (pending)      → disabled, "Round ended"
         //   - active round, 0 queries asked → disabled, "End round" (nothing to end yet)
         // Only the .btn-label text changes; the leading stop icon stays put.
         const endBtn = document.getElementById('btn-end-round');
-        if (endBtn) {
+        if (endBtn && !training) {
             endBtn.disabled = !s.canEndRound();
             const lbl = endBtn.querySelector('.btn-label');
             /* istanbul ignore else -- defensive null-guard on lbl */
             if (lbl) lbl.textContent = s.pendingNewRound ? 'Round ended' : 'End round';
         }
-        // Round hint reflects the lazy-advance state.
+        // Round hint reflects the lazy-advance state. In training there are
+        // no rounds — the hint becomes a one-liner pointing at Submit code.
         const hint = document.getElementById('round-hint');
-        if (hint) {
+        if (hint && training) {
+            hint.textContent = 'Training mode — dial in your deduced code, then click Submit code.';
+        } else if (hint) {
             if (s.pendingNewRound) {
                 hint.textContent = `Round ${s.round} completed. Submit your code, or adjust your number and click Ask to continue with round ${s.round + 1}.`;
             } else if (s.queriesInRound(s.round) > 0) {
@@ -475,6 +524,17 @@ class Game {
                 this.refreshMainMenu();
             },
         });
+        // Training games skip the question-asking phase entirely, so the
+        // efficiency/pacing score and the info-theoretic effort estimate
+        // don't apply — hide them outright (renderEnd would otherwise paint
+        // the player as the always-Lucky-Gambler tier with 0 questions).
+        if (this.state.puzzle.config && this.state.puzzle.config.training) {
+            document.getElementById('end-ranking').hidden  = true;
+            document.getElementById('end-expected').hidden = true;
+            document.getElementById('end-stats').textContent = won
+                ? 'Solved in training mode — criteria revealed.'
+                : 'Training round ended.';
+        }
         clearActive(); // game is over → don't prompt to resume
     }
 
@@ -1150,6 +1210,9 @@ function subtitleForLevel(levelId, n) {
     if (levelId === 'CLASSIC') {
         return `${n} rules. The puzzle picks however many you set on the verifier-count stepper.`;
     }
+    if (levelId === 'TRAINING') {
+        return `Same ${n}-rule pool as Classic, but every verifier's active criterion is revealed up-front. No asking — just deduce the unique code and submit. Use the verifier-count stepper to pick how many criteria you want to deduce against.`;
+    }
     if (levelId === 'HARD') {
         return `Each slot is a MYSTERY verifier — either a combination of TWO of the ${classicSourceCount()} Classic rules merged into one verifier, or one of the following rules:`;
     }
@@ -1181,7 +1244,7 @@ function extractGameIdFromInput(input) {
         }
     } catch (e) { /* ignore */ }
     // Plain id: any current or legacy level prefix (L=Classic, H=Hard,
-    // X=Extreme, plus E/M/P kept for back-compat).
-    if (/^[LHXEMP][0-9.\-]+$/i.test(input)) return input.toUpperCase();
+    // X=Extreme, T=Training, plus E/M/P kept for back-compat).
+    if (/^[LHXTEMP][0-9.\-]+$/i.test(input)) return input.toUpperCase();
     return null;
 }
